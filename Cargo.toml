@@ -1,15 +1,12 @@
-[package]
-name = "netholdem"
-description = "Terminal-based client & server for Texas Hold'em Poker."
-version = "0.1.0"
-authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
-edition = "2018"
+[workspace]
+members = [
+    "netholdem_client",
+    "netholdem_game",
+    "netholdem_protocol",
+    "netholdem_server",
+]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-docopt = "1.1"
-rs_poker = "1.0"
-serde = { version = "1", features = ["derive"] }
-tokio = { version = "0.2", features = ["full"] }
-#tokio-util = { version = "0.2", features = ["full"] }
+[profile.release]
+lto = true
+debug = 1
+incremental = false

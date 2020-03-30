@@ -7,6 +7,26 @@
       <sourceFolder url="file://$MODULE_DIR$/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_protocol/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_protocol/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_protocol/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_protocol/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_server/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_server/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_server/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_server/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_game/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_game/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_game/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_game/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_client/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_client/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_client/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/netholdem_client/benches" isTestSource="true" />
+      <excludeFolder url="file://$MODULE_DIR$/netholdem_client/target" />
+      <excludeFolder url="file://$MODULE_DIR$/netholdem_game/target" />
+      <excludeFolder url="file://$MODULE_DIR$/netholdem_protocol/target" />
+      <excludeFolder url="file://$MODULE_DIR$/netholdem_server/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

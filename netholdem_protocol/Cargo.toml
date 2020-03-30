@@ -1,0 +1,11 @@
+[package]
+name = "netholdem_protocol"
+description = "Client/server protocol for a terminal-based networked Texas Hold'em Poker game."
+version = "0.1.0"
+authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+rs_poker = "1.0"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "0.2", features = ["full"] }
