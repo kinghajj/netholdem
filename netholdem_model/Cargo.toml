@@ -1,0 +1,10 @@
+[package]
+name = "netholdem_model"
+version = "0.1.0"
+description = "Model a terminal-based networked Texas Hold'em Poker game."
+authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+rs_poker = "1.0"
+serde = { version = "1", features = ["derive"] }

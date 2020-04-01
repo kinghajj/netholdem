@@ -6,6 +6,9 @@ authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+flexi_logger = "0.15"
+log = "0.4"
+netholdem_model = { path = "../netholdem_model" }
 netholdem_protocol = { path = "../netholdem_protocol" }
 docopt = "1.1"
 cursive = "0.14"

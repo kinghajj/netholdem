@@ -6,5 +6,7 @@ authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-rs_poker = "1.0"
+log = "0.4"
+netholdem_model = { path = "../netholdem_model" }
+netholdem_protocol = { path = "../netholdem_protocol" }
 serde = { version = "1", features = ["derive"] }

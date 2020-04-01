@@ -2,6 +2,7 @@
 members = [
     "netholdem_client",
     "netholdem_game",
+    "netholdem_model",
     "netholdem_protocol",
     "netholdem_server",
 ]
