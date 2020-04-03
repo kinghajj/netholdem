@@ -1,8 +1,10 @@
 use std::error::Error;
 
-use log::{error, info};
+use futures::stream::futures_unordered::FuturesUnordered;
+use log::{debug, error, info};
 use tokio;
 use tokio::net::TcpListener;
+use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::{cli, client, state};
@@ -18,31 +20,43 @@ pub async fn run(args: cli::Args) -> Result<(), Box<dyn Error>> {
     info!("netholdem server running on {}", args.arg_bind_addr);
 
     // Main loop: wait for incoming connections, spawn tasks for each one.
-    let mut connection_tasks = Vec::new();
+    let mut connection_tasks = FuturesUnordered::new();
     loop {
         tokio::select! {
-            // Asynchronously wait for an inbound TcpStream.
-            Ok((stream, addr)) = listener.accept() => {
-                info!("accepted connection from {}", addr);
-                // Spawn task for this connection.
-                connection_tasks.push(client::spawn(state_handle.clone(), stopped_rx.clone(), stream, addr));
-            },
-            // Asynchronously wait for shutdown signal/Ctrl-C.
+            // shutdown signal/Ctrl-C.
             _ = tokio::signal::ctrl_c() => {
                 info!("received shutdown signal");
                 // Inform connection tasks of shutdown.
                 stopped_tx.broadcast(true)?;
                 // Stop accepting further connections.
                 break
-            }
+            },
+            // inbound connection,
+            Ok((stream, addr)) = listener.accept() => {
+                debug!("accepted connection from {}", addr);
+                // Spawn task for this connection.
+                connection_tasks.push(
+                    client::spawn(
+                        state_handle.clone(),
+                        stopped_rx.clone(),
+                        stream,
+                        addr
+                ));
+            },
+            // completed connection tasks
+            Some(result) = connection_tasks.next() => {
+                if let Err(e) = result {
+                    error!("{}", e);
+                }
+            },
         }
     }
 
     // Gracefully shutdown and await all connection tasks.
-    info!("reaping connection tasks");
-    for (addr, task) in connection_tasks.into_iter() {
-        if let Err(e) = task.await {
-            error!("while draining {}; error = {:?}", addr, e);
+    info!("reaping {} connection tasks", connection_tasks.len());
+    while let Some(result) = connection_tasks.next().await {
+        if let Err(e) = result {
+            error!("{}", e);
         }
     }
 
