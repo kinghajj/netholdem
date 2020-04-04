@@ -44,14 +44,15 @@ async fn process_connection(
     let mut phase = requests::Phase::NewClient;
     //let mut handler = requests::initial_handler(&state, client);
 
+    debug!("starting processing loop for {}", addr);
     loop {
         tokio::select! {
-            Some(true) = stopped_rx.next() => {
+            Some(stop) = stopped_rx.next() => if stop {
                 debug!("received notification to stop processing {}", addr);
                 hard_stop = true;
                 break;
             },
-            Some(resp) = responses_rx.next() =>
+            Some(resp) = responses_rx.next() => {
                 match serde_json::to_string(&resp) {
                     Ok(json) => {
                         if let Err(e) = lines.send(&json).await {
@@ -59,8 +60,10 @@ async fn process_connection(
                         }
                     }
                     Err(e) => error!("while serializing response to {}: {}", addr, e),
-                },
-            Some(line) = lines.next() =>
+                }
+            },
+            opt_line = lines.next() => if let Some(line) = opt_line {
+                debug!("received a request line from {}", addr);
                 match line {
                     Ok(line) => {
                         match serde_json::from_str::<Request>(&line) {
@@ -69,16 +72,18 @@ async fn process_connection(
                         }
                     },
                     Err(e) => error!("reading line from {}: {}", addr, e),
-                },
+                }
+            } else {
+                debug!("disconnection from {}", addr);
+                break;
+            }
         }
     }
 
-    debug!("disconnecting from {}", addr);
-
     if !hard_stop {
+        debug!("cleaning up {}", addr);
         state.lock().await.cleanup_client(addr);
     }
 
-    // TODO: handle client disconnection cleanup.
     Ok(())
 }
