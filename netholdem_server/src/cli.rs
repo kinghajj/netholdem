@@ -1,6 +1,5 @@
 use docopt::Docopt;
 use serde::Deserialize;
-use std::error::Error;
 
 pub const USAGE: &'static str = "
 netholdem_server - text-based networked Texas hold'em.
@@ -20,6 +19,8 @@ pub struct Args {
     pub arg_bind_addr: String,
 }
 
-pub fn parse_args() -> Result<Args, Box<dyn Error>> {
-    Ok(Docopt::new(USAGE).and_then(|d| d.deserialize())?)
+pub fn parse_args() -> Args {
+    Docopt::new(USAGE)
+        .and_then(|d| d.deserialize())
+        .unwrap_or_else(|e| e.exit())
 }

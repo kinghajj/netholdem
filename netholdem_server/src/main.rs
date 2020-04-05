@@ -16,5 +16,5 @@ async fn main() -> Result<(), Box<dyn Error>> {
     flexi_logger::Logger::with_env()
         .format(|w, now, r| flexi_logger::colored_with_thread(w, now, r))
         .start()?;
-    server::run(cli::parse_args()?).await
+    server::run(cli::parse_args()).await
 }

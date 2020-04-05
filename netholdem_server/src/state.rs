@@ -1,16 +1,100 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{btree_map, hash_map, BTreeMap, HashMap};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use snafu::Snafu;
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, watch, Mutex, MutexGuard};
 
 use netholdem_model::{Player, RoomId};
 use netholdem_protocol::Response;
-use std::collections::{btree_map, hash_map};
 
 /// The global state of the whole server.
 pub struct State {
+    stopping: AtomicBool,
+    synced: Mutex<Synced>,
+}
+
+impl State {
+    /// Create a new, empty server state.
+    fn new() -> Self {
+        State {
+            stopping: AtomicBool::new(false),
+            synced: Mutex::new(Synced::new()),
+        }
+    }
+
+    /// Wait for access to the synced state.
+    pub async fn lock(&self) -> MutexGuard<'_, Synced> {
+        self.synced.lock().await
+    }
+
+    /// Inquire whether the server is in the process of shutting down.
+    pub fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+}
+
+/// A shared handle to the global server state.
+pub type Shared = Arc<State>;
+
+/// Create a new, empty server state, and return a guard for it.
+pub fn guard() -> Guard {
+    let state = Arc::new(State::new());
+    let (stopped_tx, stopped_rx) = watch::channel(false);
+    Guard {
+        state,
+        stopped_tx,
+        stopped_rx,
+    }
+}
+
+/// Ensures that clients receive notification of server shutdown.
+///
+/// This type implements `Drop`, on which it uses a combination of an atomic
+/// bool and a Tokio watch to notify client connection tasks that the server
+/// has begun shutdown. The main server loop should be arranged so that no
+/// matter how it exits, this guard gets dropped.
+pub struct Guard {
+    state: Shared,
+    stopped_tx: watch::Sender<bool>,
+    stopped_rx: watch::Receiver<bool>,
+}
+
+impl<'a> Guard {
+    /// Create a handle for a new incoming client.
+    pub fn new_client(&self) -> ClientHandle {
+        ClientHandle {
+            state: self.state.clone(),
+            stopped_rx: self.stopped_rx.clone(),
+        }
+    }
+}
+
+impl<'a> Drop for Guard {
+    fn drop(&mut self) {
+        self.state.stopping.store(true, Ordering::SeqCst);
+        self.stopped_tx
+            .broadcast(true)
+            .expect("at least our own watch receiver left");
+    }
+}
+
+/// A handle to the state and shutdown notifications for new clients.
+pub struct ClientHandle {
+    state: Shared,
+    stopped_rx: watch::Receiver<bool>,
+}
+
+impl ClientHandle {
+    /// Consume the handle to acquire its members.
+    pub fn split(self) -> (Shared, watch::Receiver<bool>) {
+        (self.state, self.stopped_rx)
+    }
+}
+
+/// The mutex-synchronized state.
+pub struct Synced {
     /// A collection of each connected client.
     clients: HashMap<SocketAddr, Client>,
     /// A mapping of each client to their player name.
@@ -21,7 +105,16 @@ pub struct State {
     rooms: HashMap<RoomId, Arc<Mutex<Room>>>,
 }
 
-impl State {
+impl Synced {
+    fn new() -> Self {
+        Synced {
+            clients: HashMap::new(),
+            players: HashMap::new(),
+            r_players: BTreeMap::new(),
+            rooms: HashMap::new(),
+        }
+    }
+
     pub fn register_new_client(&mut self, addr: SocketAddr, tx: ResponseTx) -> Client {
         let client = Client::new(addr, tx);
         self.clients.insert(addr, client.clone());
@@ -64,12 +157,6 @@ pub enum Error {
     ClientAlreadyNamed,
 }
 
-pub type Handle = Arc<Mutex<State>>;
-
-pub fn create() -> Handle {
-    Arc::new(Mutex::new(State::new()))
-}
-
 /// A handle for each client connected to the server.
 #[derive(Clone)]
 pub struct Client {
@@ -96,22 +183,8 @@ pub struct Room {
     // game: netholdem_game::State,
 }
 
-impl State {
-    fn new() -> Self {
-        State {
-            clients: HashMap::new(),
-            players: HashMap::new(),
-            r_players: BTreeMap::new(),
-            rooms: HashMap::new(),
-        }
-    }
-}
-
 /// The sender half for responses to a client.
 pub type ResponseTx = mpsc::UnboundedSender<Response>;
 
 /// The receiver half for responses to a client.
 pub type ResponseRx = mpsc::UnboundedReceiver<Response>;
-
-pub type StoppedTx = watch::Sender<bool>;
-pub type StoppedRx = watch::Receiver<bool>;

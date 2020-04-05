@@ -15,7 +15,7 @@ pub enum Phase {
 impl Phase {
     pub async fn handle(
         self,
-        state: &state::Handle,
+        state: &state::Shared,
         client: &mut state::Client,
         req: Request,
     ) -> Self {
@@ -28,7 +28,7 @@ impl Phase {
 }
 
 async fn handle_new_client(
-    state: &state::Handle,
+    state: &state::Shared,
     client: &mut state::Client,
     req: Request,
 ) -> Phase {
@@ -40,10 +40,7 @@ async fn handle_new_client(
                         Response::Introduction(IntroductionResponse::NameAlreadyInUse),
                         NewClient,
                     ),
-                    Err(state::Error::ClientAlreadyNamed) => (
-                        Response::Illegal,
-                        NewClient
-                    ),
+                    Err(state::Error::ClientAlreadyNamed) => (Response::Illegal, NewClient),
                     Ok(_) => (
                         Response::Introduction(IntroductionResponse::Success),
                         RegisteredPlayer,
@@ -64,13 +61,17 @@ async fn handle_new_client(
 }
 
 async fn handle_registered_player(
-    _state: &state::Handle,
+    _state: &state::Shared,
     _client: &mut state::Client,
     _req: Request,
 ) -> Phase {
     RegisteredPlayer
 }
 
-async fn handle_playing(_state: &state::Handle, _client: &mut state::Client, _req: Request) -> Phase {
+async fn handle_playing(
+    _state: &state::Shared,
+    _client: &mut state::Client,
+    _req: Request,
+) -> Phase {
     Playing
 }

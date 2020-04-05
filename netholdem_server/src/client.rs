@@ -1,41 +1,36 @@
 use std::error::Error;
 use std::net::SocketAddr;
 
-
-use futures::{SinkExt};
+use futures::SinkExt;
 use log::{debug, error};
 
 use tokio;
 
 use tokio::net::TcpStream;
 use tokio::stream::StreamExt;
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LinesCodec};
 
-use netholdem_protocol::{IntroductionResponse, Request, Response};
+use netholdem_protocol::Request;
 
 use crate::{requests, state};
 
-pub fn spawn(
-    state_handle: state::Handle,
-    stopped: state::StoppedRx,
-    stream: TcpStream,
-    addr: SocketAddr,
-) -> JoinHandle<()> {
+pub fn spawn(guard: &state::Guard, stream: TcpStream, addr: SocketAddr) -> JoinHandle<()> {
+    let handle = guard.new_client();
     tokio::spawn(async move {
-        if let Err(e) = process_connection(state_handle, stopped, stream, addr).await {
+        if let Err(e) = process_connection(handle, stream, addr).await {
             error!("while handling {}; error = {:?}", addr, e);
         }
     })
 }
 
 async fn process_connection(
-    state: state::Handle,
-    mut stopped_rx: watch::Receiver<bool>,
+    handle: state::ClientHandle,
     stream: TcpStream,
     addr: SocketAddr,
 ) -> Result<(), Box<dyn Error>> {
+    let (state, mut stopped_rx) = handle.split();
     let (responses_tx, mut responses_rx) = mpsc::unbounded_channel();
     let mut lines = Framed::new(stream, LinesCodec::new());
     let mut hard_stop = false;
@@ -80,7 +75,7 @@ async fn process_connection(
         }
     }
 
-    if !hard_stop {
+    if !hard_stop && !state.stopping() {
         debug!("cleaning up {}", addr);
         state.lock().await.cleanup_client(addr);
     }
