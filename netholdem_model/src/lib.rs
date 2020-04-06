@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
 pub struct Player {
-    name: String,
+    pub name: String,
 }
 
 /// For simplicity, money is represented as discreet, indivisible units.
