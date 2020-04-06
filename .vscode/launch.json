@@ -1,19 +1,24 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug Server",
+            "name": "Debug server",
             "type": "lldb",
             "request": "launch",
-            "cargo": {
-                "args": ["build",  "-p",  "netholdem_server"]
-            },
+            "preLaunchTask": "Build (debug)",
             "program": "${workspaceFolder}/target/debug/netholdem_server",
-            "args": ["0.0.0.0:8023"],
             "cwd": "${workspaceFolder}",
+            "args": ["0.0.0.0:8023"],
+            "env": {"RUST_LOG": "debug"}
+        },
+        {
+            "name": "Debug client",
+            "type": "lldb",
+            "request": "launch",
+            "preLaunchTask": "Build (debug)",
+            "program": "${workspaceFolder}/target/debug/netholdem_client",
+            "cwd": "${workspaceFolder}",
+            "args": ["0.0.0.0:8023"],
             "env": {"RUST_LOG": "debug"}
         }
     ]
