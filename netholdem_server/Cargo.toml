@@ -3,6 +3,7 @@ name = "netholdem_server"
 description = "Server for a terminal-based networked Texas Hold'em Poker game."
 version = "0.1.0"
 authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
+license = "MIT"
 edition = "2018"
 
 [dependencies]
