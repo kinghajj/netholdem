@@ -31,7 +31,7 @@ impl State {
 
     /// Inquire whether the server is in the process of shutting down.
     pub fn stopping(&self) -> bool {
-        self.stopping.load(Ordering::SeqCst)
+        self.stopping.load(Ordering::Acquire)
     }
 }
 
@@ -73,7 +73,7 @@ impl<'a> Guard {
 
 impl<'a> Drop for Guard {
     fn drop(&mut self) {
-        self.state.stopping.store(true, Ordering::SeqCst);
+        self.state.stopping.store(true, Ordering::Release);
         self.stopped_tx
             .broadcast(true)
             .expect("at least our own watch receiver left");
