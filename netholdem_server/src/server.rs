@@ -13,20 +13,20 @@ use tokio_util::codec::{Framed, LinesCodec};
 
 use netholdem_protocol::Request;
 
-use crate::{cli, requests, state};
+use crate::{requests, settings, state};
 
 /// Execute the entire life-cycle of the netholdem server.
 pub async fn run(
-    args: cli::Args,
+    server: settings::Server,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<Stats, Box<dyn Error>> {
-    let mut listener = TcpListener::bind(&args.arg_bind_addr).await?;
+    let mut listener = TcpListener::bind(&server.bind_addr).await?;
     let mut connection_tasks = FuturesUnordered::new();
     let mut total_accepted_connections = 0;
     {
         let guard = state::guard();
         // Main loop: wait for something interesting, like...
-        info!("netholdem server running on {}", args.arg_bind_addr);
+        info!("running on {}", server.bind_addr);
         loop {
             tokio::select! {
                 // shutdown signal
@@ -143,7 +143,7 @@ async fn process_connection(
 #[cfg(test)]
 mod tests {
     use super::run;
-    use crate::cli;
+    use crate::settings;
     use futures::stream::futures_unordered::FuturesUnordered;
     use futures::SinkExt;
     use std::time::Duration;
@@ -171,11 +171,11 @@ mod tests {
             .expect("logger to start");
         // Spawn server.
         let bind_addr = "127.0.0.1:8023";
-        let args = cli::Args {
-            arg_bind_addr: bind_addr.into(),
+        let settings = settings::Server {
+            bind_addr: bind_addr.into(),
         };
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = tokio::spawn(async move { run(args, shutdown_rx).await.ok() });
+        let server = tokio::spawn(async move { run(settings, shutdown_rx).await.ok() });
 
         // Hack: wait a bit for the server to be ready.
         tokio::time::delay_for(Duration::from_millis(15)).await;

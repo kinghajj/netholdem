@@ -1,0 +1,11 @@
+[logging]
+level = "info"
+
+[runtime]
+threaded = true
+core_threads = 8
+max_threads = 16
+thread_name = "async-worker"
+
+[server]
+bind_addr = "127.0.0.1:8023"

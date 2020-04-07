@@ -7,9 +7,8 @@
             "request": "launch",
             "preLaunchTask": "Build (debug)",
             "program": "${workspaceFolder}/target/debug/netholdem_server",
-            "cwd": "${workspaceFolder}",
-            "args": ["0.0.0.0:8023"],
-            "env": {"RUST_LOG": "debug"}
+            "cwd": "${workspaceFolder}/netholdem_server",
+            "env": {"NETHOLDEM_SERVER_RUN_MODE": "development"}
         },
         {
             "name": "Debug client",

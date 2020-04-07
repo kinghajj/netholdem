@@ -1,31 +1,59 @@
 #![warn(rust_2018_idioms)]
 
-use log::error;
+use std::error::Error;
+use std::str::FromStr;
+
+use flexi_logger::LogSpecBuilder;
+use log::{error, LevelFilter};
 use tokio;
 use tokio::sync::oneshot;
 
-mod cli;
 mod requests;
 mod server;
+mod settings;
 mod state;
 
-// TODO: maybe create runtime manually, for finer control?
-#[tokio::main]
-async fn main() {
-    let args = cli::parse_args();
-    flexi_logger::Logger::with_env()
-        .format(|w, now, r| flexi_logger::colored_with_thread(w, now, r))
-        .start()
-        .expect("logger to start");
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server = tokio::spawn(async move {
-        if let Err(e) = server::run(args, shutdown_rx).await {
-            error!("server stopped: {}", e);
+fn main() -> Result<(), Box<dyn Error>> {
+    let settings = settings::load()?;
+    setup_logger(&settings.logging)?;
+    let mut runtime = setup_runtime(&settings.runtime)?;
+
+    Ok(runtime.block_on(async move {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            if let Err(e) = server::run(settings.server, shutdown_rx).await {
+                error!("server stopped: {}", e);
+            }
+        });
+        tokio::signal::ctrl_c().await.expect("setup signal handler");
+        shutdown_tx.send(()).expect("server still running");
+        if let Err(e) = server.await {
+            error!("server task: {}", e);
         }
-    });
-    tokio::signal::ctrl_c().await.expect("setup signal handler");
-    shutdown_tx.send(()).expect("server still running");
-    if let Err(e) = server.await {
-        error!("server task: {}", e);
+    }))
+}
+
+fn setup_logger(l: &settings::Logging) -> Result<(), Box<dyn Error>> {
+    let mut spec_builder = LogSpecBuilder::new();
+    spec_builder.default(LevelFilter::from_str(&l.level)?);
+    let spec = spec_builder.build();
+    flexi_logger::Logger::with(spec)
+        .format(|w, now, r| flexi_logger::default_format(w, now, r))
+        .start()?;
+    Ok(())
+}
+
+fn setup_runtime(r: &settings::Runtime) -> Result<tokio::runtime::Runtime, Box<dyn Error>> {
+    let mut builder = tokio::runtime::Builder::default();
+    builder
+        .enable_all()
+        .core_threads(r.core_threads)
+        .max_threads(r.max_threads)
+        .thread_name(&r.thread_name);
+    if r.threaded {
+        builder.threaded_scheduler();
+    } else {
+        builder.basic_scheduler();
     }
+    Ok(builder.build()?)
 }
