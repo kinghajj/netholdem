@@ -1,13 +1,19 @@
 use std::error::Error;
+use std::net::SocketAddr;
 
 use futures::stream::futures_unordered::FuturesUnordered;
+use futures::SinkExt;
 use log::{debug, error, info};
 use tokio;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::stream::StreamExt;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
+use tokio_util::codec::{Framed, LinesCodec};
 
-use crate::{cli, client, state};
+use netholdem_protocol::Request;
+
+use crate::{cli, requests, state};
 
 /// Execute the entire life-cycle of the netholdem server.
 pub async fn run(
@@ -36,7 +42,7 @@ pub async fn run(
                     debug!("accepted connection from {}", addr);
                     total_accepted_connections += 1;
                     // Spawn task for this connection.
-                    connection_tasks.push(client::spawn(&guard, stream, addr));
+                    connection_tasks.push(spawn_client(&guard, stream, addr));
                 },
                 // completed connection task
                 Some(result) = connection_tasks.next() => {
@@ -67,13 +73,80 @@ pub struct Stats {
     pub total_accepted_connections: usize,
 }
 
+fn spawn_client(guard: &state::Guard, stream: TcpStream, addr: SocketAddr) -> JoinHandle<()> {
+    let handle = guard.new_client();
+    tokio::spawn(async move {
+        if let Err(e) = process_connection(handle, stream, addr).await {
+            error!("while handling {}; error = {:?}", addr, e);
+        }
+    })
+}
+
+async fn process_connection(
+    handle: state::ClientHandle,
+    stream: TcpStream,
+    addr: SocketAddr,
+) -> Result<(), Box<dyn Error>> {
+    let (state, mut stopped_rx) = handle.split();
+    let (responses_tx, mut responses_rx) = mpsc::unbounded_channel();
+    let mut lines = Framed::new(stream, LinesCodec::new());
+    let mut hard_stop = false;
+
+    let mut client = state.lock().await.register_new_client(addr, responses_tx);
+    let mut phase = requests::Phase::NewClient;
+    //let mut handler = requests::initial_handler(&state, client);
+
+    debug!("starting processing loop for {}", addr);
+    loop {
+        tokio::select! {
+            Some(stop) = stopped_rx.next() => if stop {
+                debug!("received notification to stop processing {}", addr);
+                hard_stop = true;
+                break;
+            },
+            Some(resp) = responses_rx.next() => {
+                match serde_json::to_string(&resp) {
+                    Ok(json) => {
+                        if let Err(e) = lines.send(&json).await {
+                            error!("while sending response to {}: {}", addr, e);
+                        }
+                    }
+                    Err(e) => error!("while serializing response to {}: {}", addr, e),
+                }
+            },
+            opt_line = lines.next() => if let Some(line) = opt_line {
+                debug!("received a request line from {}", addr);
+                match line {
+                    Ok(line) => {
+                        match serde_json::from_str::<Request>(&line) {
+                            Ok(req) => phase = phase.handle(&state, &mut client, req).await,
+                            Err(e) => error!("parsing request from {}: {}", addr, e),
+                        }
+                    },
+                    Err(e) => error!("reading line from {}: {}", addr, e),
+                }
+            } else {
+                debug!("disconnection from {}", addr);
+                break;
+            }
+        }
+    }
+
+    if !hard_stop && !state.stopping() {
+        debug!("cleaning up {}", addr);
+        state.lock().await.cleanup_client(addr);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::run;
     use crate::cli;
-    use std::time::Duration;
     use futures::stream::futures_unordered::FuturesUnordered;
     use futures::SinkExt;
+    use std::time::Duration;
 
     use tokio::net::TcpStream;
     use tokio::stream::StreamExt;
@@ -86,11 +159,11 @@ mod tests {
     // Ensure that:
     //
     // - a server can be started.
-    // - a large number of clients can connect and submit succesful requests.
+    // - a large number of clients can connect and submit successful requests.
     // - the server receives the shutdown notification.
     // - all client tasks stop.
     // - the server shuts down gracefully.
-    #[tokio::test(core_threads=8)]
+    #[tokio::test(core_threads = 8)]
     async fn smoke() {
         flexi_logger::Logger::with_env()
             .format(|w, now, r| flexi_logger::with_thread(w, now, r))
@@ -145,7 +218,10 @@ mod tests {
         // Ensure every client successfully introduced themselves.
         for client in clients.iter() {
             let &(_, ref response) = client.as_ref().expect("clients to succeed");
-            assert_eq!(response, &Response::Introduction(IntroductionResponse::Success));
+            assert_eq!(
+                response,
+                &Response::Introduction(IntroductionResponse::Success)
+            );
         }
 
         // Tell server to shutdown.
@@ -156,10 +232,7 @@ mod tests {
             .expect("server shutdown smoothly");
 
         // Ensure the server agrees with us.
-        assert_eq!(
-            stats.total_accepted_connections,
-            NUM_CLIENTS
-        );
+        assert_eq!(stats.total_accepted_connections, NUM_CLIENTS);
         drop(clients);
     }
 }

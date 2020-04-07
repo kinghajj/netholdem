@@ -1,13 +1,10 @@
 #![warn(rust_2018_idioms)]
 
-
-
 use log::error;
 use tokio;
 use tokio::sync::oneshot;
 
 mod cli;
-mod client;
 mod requests;
 mod server;
 mod state;
