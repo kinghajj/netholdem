@@ -15,7 +15,7 @@ pub fn load() -> Result<Settings, ConfigError> {
 }
 
 const DEFAULT_CFG_PATH: &'static str = "config/default";
-const LOCAL_CFG_PATH: &'static str = "config/default";
+const LOCAL_CFG_PATH: &'static str = "config/local";
 const RUN_MODE_ENV: &'static str = "NETHOLDEM_SERVER_RUN_MODE";
 const ENV_PREFIX: &'static str = "netholdem_server";
 
