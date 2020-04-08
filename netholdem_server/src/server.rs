@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::future::Future;
 use std::net::SocketAddr;
 
 use futures::stream::futures_unordered::FuturesUnordered;
@@ -7,11 +8,11 @@ use log::{debug, error, info};
 use tokio;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::stream::StreamExt;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LinesCodec};
 
-use netholdem_protocol::Request;
+use netholdem_protocol::{Request, Response};
 
 use crate::{requests, settings, state};
 
@@ -21,7 +22,7 @@ pub async fn run(
     mut shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<Stats, Box<dyn Error>> {
     let mut listener = TcpListener::bind(&server.bind_addr).await?;
-    let mut connection_tasks = FuturesUnordered::new();
+    let mut client_tasks = FuturesUnordered::new();
     let mut total_accepted_connections = 0;
     {
         let guard = state::guard();
@@ -42,10 +43,12 @@ pub async fn run(
                     debug!("accepted connection from {}", addr);
                     total_accepted_connections += 1;
                     // Spawn task for this connection.
-                    connection_tasks.push(spawn_client(&guard, stream, addr));
+                    let (connection, request) = spawn_client(&guard, stream, addr);
+                    client_tasks.push(connection);
+                    client_tasks.push(request);
                 },
                 // completed connection task
-                Some(result) = connection_tasks.next() => {
+                Some(result) = client_tasks.next() => {
                     if let Err(e) = result {
                         error!("{}", e);
                     }
@@ -55,8 +58,8 @@ pub async fn run(
     }
 
     // Gracefully shutdown and await all connection tasks.
-    info!("reaping {} connection tasks", connection_tasks.len());
-    while let Some(result) = connection_tasks.next().await {
+    info!("reaping {} client tasks", client_tasks.len());
+    while let Some(result) = client_tasks.next().await {
         if let Err(e) = result {
             error!("{}", e);
         }
@@ -73,38 +76,48 @@ pub struct Stats {
     pub total_accepted_connections: usize,
 }
 
-fn spawn_client(guard: &state::Guard, stream: TcpStream, addr: SocketAddr) -> JoinHandle<()> {
+fn spawn_client(
+    guard: &state::Guard,
+    stream: TcpStream,
+    addr: SocketAddr,
+) -> (JoinHandle<()>, JoinHandle<()>) {
     let handle = guard.new_client();
-    tokio::spawn(async move {
-        if let Err(e) = process_connection(handle, stream, addr).await {
+    let (state, stopped_rx) = handle.split();
+    let stopped_rx2 = stopped_rx.clone();
+    let (response_tx, response_rx) = mpsc::channel(16);
+    let (request_tx, request_rx) = mpsc::channel(16);
+    let connection_task = tokio::spawn(async move {
+        let result = process_connection(stopped_rx, stream, addr, response_rx, request_tx).await;
+        if let Err(e) = result {
+            error!("while processing {}; error = {:?}", addr, e);
+        }
+    });
+    let request_task = tokio::spawn(async move {
+        let result = handle_requests(state, stopped_rx2, addr, request_rx, response_tx).await;
+        if let Err(e) = result {
             error!("while handling {}; error = {:?}", addr, e);
         }
-    })
+    });
+    (connection_task, request_task)
 }
 
 async fn process_connection(
-    handle: state::ClientHandle,
+    mut stopped_rx: watch::Receiver<bool>,
     stream: TcpStream,
     addr: SocketAddr,
+    mut response_rx: mpsc::Receiver<Response>,
+    mut request_tx: mpsc::Sender<Request>,
 ) -> Result<(), Box<dyn Error>> {
-    let (state, mut stopped_rx) = handle.split();
-    let (responses_tx, mut responses_rx) = mpsc::unbounded_channel();
     let mut lines = Framed::new(stream, LinesCodec::new());
-    let mut hard_stop = false;
 
-    let mut client = state.lock().await.register_new_client(addr, responses_tx);
-    let mut phase = requests::Phase::NewClient;
-    //let mut handler = requests::initial_handler(&state, client);
-
-    debug!("starting processing loop for {}", addr);
+    debug!("starting connection processing loop for {}", addr);
     loop {
         tokio::select! {
             Some(stop) = stopped_rx.next() => if stop {
                 debug!("received notification to stop processing {}", addr);
-                hard_stop = true;
                 break;
             },
-            Some(resp) = responses_rx.next() => {
+            Some(resp) = response_rx.next() => {
                 match serde_json::to_string(&resp) {
                     Ok(json) => {
                         if let Err(e) = lines.send(&json).await {
@@ -119,7 +132,12 @@ async fn process_connection(
                 match line {
                     Ok(line) => {
                         match serde_json::from_str::<Request>(&line) {
-                            Ok(req) => phase = phase.handle(&state, &mut client, req).await,
+                            Ok(req) => {
+                                if let Err(_) = request_tx.send(req).await {
+                                    debug!("apparent death of sibling task for {}", addr);
+                                    break;
+                                }
+                            },
                             Err(e) => error!("parsing request from {}: {}", addr, e),
                         }
                     },
@@ -128,6 +146,38 @@ async fn process_connection(
             } else {
                 debug!("disconnection from {}", addr);
                 break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_requests(
+    state: state::Shared,
+    mut stopped_rx: watch::Receiver<bool>,
+    addr: SocketAddr,
+    mut request_rx: mpsc::Receiver<Request>,
+    response_tx: mpsc::Sender<Response>,
+) -> Result<(), Box<dyn Error>> {
+    let mut hard_stop = false;
+    let mut client = state.lock().await.register_new_client(addr, response_tx);
+    let mut phase = requests::Phase::NewClient;
+
+    debug!("starting request handling loop for {}", addr);
+    loop {
+        tokio::select! {
+            Some(stop) = stopped_rx.next() => if stop {
+                debug!("received notification to stop processing {}", addr);
+                hard_stop = true;
+                break;
+            },
+            opt_request = request_rx.next() => match opt_request {
+                Some(req) => phase = phase.handle(&state, &mut client, req).await,
+                None => {
+                    debug!("apparent death of sibling task for {}", addr);
+                    break;
+                },
             }
         }
     }

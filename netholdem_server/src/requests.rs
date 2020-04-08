@@ -48,12 +48,14 @@ async fn handle_new_client(
                 };
             client
                 .send(response)
+                .await
                 .map_err(|e| error!("while sending response to {}: {}", client.address(), e));
             phase
         }
         _ => {
             client
                 .send(Response::Illegal)
+                .await
                 .map_err(|e| error!("while sending response to {}: {}", client.address(), e));
             NewClient
         }

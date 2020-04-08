@@ -81,6 +81,7 @@ impl<'a> Drop for Guard {
 }
 
 /// A handle to the state and shutdown notifications for new clients.
+#[derive(Clone)]
 pub struct ClientHandle {
     state: Shared,
     stopped_rx: watch::Receiver<bool>,
@@ -173,8 +174,8 @@ impl Client {
         self.addr
     }
 
-    pub fn send(&mut self, r: Response) -> Result<(), mpsc::error::SendError<Response>> {
-        self.tx.send(r)
+    pub async fn send(&mut self, r: Response) -> Result<(), mpsc::error::SendError<Response>> {
+        self.tx.send(r).await
     }
 }
 
@@ -184,7 +185,7 @@ pub struct Room {
 }
 
 /// The sender half for responses to a client.
-pub type ResponseTx = mpsc::UnboundedSender<Response>;
+pub type ResponseTx = mpsc::Sender<Response>;
 
 /// The receiver half for responses to a client.
-pub type ResponseRx = mpsc::UnboundedReceiver<Response>;
+pub type ResponseRx = mpsc::Receiver<Response>;
