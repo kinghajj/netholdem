@@ -1,7 +1,9 @@
 use std::error::Error;
-use std::future::Future;
 use std::net::SocketAddr;
 
+use async_local_bounded_channel as spsc_async;
+use futures::future::{select, Either, FutureExt};
+use futures::pin_mut;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::SinkExt;
 use log::{debug, error, info};
@@ -11,6 +13,7 @@ use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LinesCodec};
+use typenum::U2;
 
 use netholdem_protocol::{Request, Response};
 
@@ -42,10 +45,8 @@ pub async fn run(
                 Ok((stream, addr)) = listener.accept() => {
                     debug!("accepted connection from {}", addr);
                     total_accepted_connections += 1;
-                    // Spawn task for this connection.
-                    let (connection, request) = spawn_client(&guard, stream, addr);
-                    client_tasks.push(connection);
-                    client_tasks.push(request);
+                    let task = spawn_client(&guard, stream, addr);
+                    client_tasks.push(task);
                 },
                 // completed connection task
                 Some(result) = client_tasks.next() => {
@@ -76,29 +77,50 @@ pub struct Stats {
     pub total_accepted_connections: usize,
 }
 
-fn spawn_client(
-    guard: &state::Guard,
-    stream: TcpStream,
-    addr: SocketAddr,
-) -> (JoinHandle<()>, JoinHandle<()>) {
+// The limit of pending responses waiting to be sent to a particular client.
+// This should be a bit higher than the maximum number of responses we expect
+// to send to a client as a result of a request by *any other client*.
+const RESPONSE_CAPACITY: usize = 4;
+
+// The limit of pending requests from a particular client.
+type RequestCapacity = U2;
+
+type RequestTx<'a> = spsc_async::Sender<'a, Request, RequestCapacity>;
+type RequestRx<'a> = spsc_async::Receiver<'a, Request, RequestCapacity>;
+
+type ClientTask = JoinHandle<()>;
+
+fn spawn_client(guard: &state::Guard, stream: TcpStream, addr: SocketAddr) -> ClientTask {
     let handle = guard.new_client();
-    let (state, stopped_rx) = handle.split();
-    let stopped_rx2 = stopped_rx.clone();
-    let (response_tx, response_rx) = mpsc::channel(16);
-    let (request_tx, request_rx) = mpsc::channel(16);
-    let connection_task = tokio::spawn(async move {
-        let result = process_connection(stopped_rx, stream, addr, response_rx, request_tx).await;
-        if let Err(e) = result {
-            error!("while processing {}; error = {:?}", addr, e);
+    tokio::spawn(async move {
+        let (state, stopped_rx) = handle.split();
+        let (response_tx, response_rx) = mpsc::channel(RESPONSE_CAPACITY);
+        let mut requests = spsc_async::channel::<Request, RequestCapacity>();
+        let (request_tx, request_rx) = requests.split();
+        let connection = {
+            let stopped_rx = stopped_rx.clone();
+            async move {
+                let result =
+                    process_connection(stopped_rx, stream, addr, response_rx, request_tx).await;
+                if let Err(e) = result {
+                    error!("while processing {}; error = {:?}", addr, e);
+                }
+            }
+        };
+        let request = async move {
+            let result = handle_requests(state, stopped_rx, addr, request_rx, response_tx).await;
+            if let Err(e) = result {
+                error!("while handling {}; error = {:?}", addr, e);
+            }
+        };
+
+        pin_mut!(connection, request);
+        let remaining = select(connection, request).await.factor_first().1;
+        match remaining {
+            Either::Left(f) => f.await,
+            Either::Right(f) => f.await,
         }
-    });
-    let request_task = tokio::spawn(async move {
-        let result = handle_requests(state, stopped_rx2, addr, request_rx, response_tx).await;
-        if let Err(e) = result {
-            error!("while handling {}; error = {:?}", addr, e);
-        }
-    });
-    (connection_task, request_task)
+    })
 }
 
 async fn process_connection(
@@ -106,7 +128,7 @@ async fn process_connection(
     stream: TcpStream,
     addr: SocketAddr,
     mut response_rx: mpsc::Receiver<Response>,
-    mut request_tx: mpsc::Sender<Request>,
+    mut request_tx: RequestTx<'_>,
 ) -> Result<(), Box<dyn Error>> {
     let mut lines = Framed::new(stream, LinesCodec::new());
 
@@ -157,7 +179,7 @@ async fn handle_requests(
     state: state::Shared,
     mut stopped_rx: watch::Receiver<bool>,
     addr: SocketAddr,
-    mut request_rx: mpsc::Receiver<Request>,
+    mut request_rx: RequestRx<'_>,
     response_tx: mpsc::Sender<Response>,
 ) -> Result<(), Box<dyn Error>> {
     let mut hard_stop = false;
@@ -168,13 +190,13 @@ async fn handle_requests(
     loop {
         tokio::select! {
             Some(stop) = stopped_rx.next() => if stop {
-                debug!("received notification to stop processing {}", addr);
+                debug!("received notification to stop handling {}", addr);
                 hard_stop = true;
                 break;
             },
-            opt_request = request_rx.next() => match opt_request {
-                Some(req) => phase = phase.handle(&state, &mut client, req).await,
-                None => {
+            opt_request = request_rx.receive() => match opt_request {
+                Ok(req) => phase = phase.handle(&state, &mut client, req).await,
+                Err(_) => {
                     debug!("apparent death of sibling task for {}", addr);
                     break;
                 },
@@ -188,101 +210,4 @@ async fn handle_requests(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::run;
-    use crate::settings;
-    use futures::stream::futures_unordered::FuturesUnordered;
-    use futures::SinkExt;
-    use std::time::Duration;
-
-    use tokio::net::TcpStream;
-    use tokio::stream::StreamExt;
-    use tokio::sync::oneshot;
-    use tokio_util::codec::{Framed, LinesCodec};
-
-    use netholdem_model::Player;
-    use netholdem_protocol::{IntroductionRequest, IntroductionResponse, Request, Response};
-
-    // Ensure that:
-    //
-    // - a server can be started.
-    // - a large number of clients can connect and submit successful requests.
-    // - the server receives the shutdown notification.
-    // - all client tasks stop.
-    // - the server shuts down gracefully.
-    #[tokio::test(core_threads = 8)]
-    async fn smoke() {
-        flexi_logger::Logger::with_env()
-            .format(|w, now, r| flexi_logger::with_thread(w, now, r))
-            .start()
-            .expect("logger to start");
-        // Spawn server.
-        let bind_addr = "127.0.0.1:8023";
-        let settings = settings::Server {
-            bind_addr: bind_addr.into(),
-        };
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = tokio::spawn(async move { run(settings, shutdown_rx).await.ok() });
-
-        // Hack: wait a bit for the server to be ready.
-        tokio::time::delay_for(Duration::from_millis(15)).await;
-
-        // Spawn many clients in parallel.
-        const NUM_CLIENTS: usize = 1000;
-        let mut connections = FuturesUnordered::new();
-        for id in 0..NUM_CLIENTS {
-            connections.push(tokio::spawn(async move {
-                match TcpStream::connect(bind_addr).await {
-                    Ok(stream) => {
-                        let mut lines = Framed::new(stream, LinesCodec::new());
-                        // introduce ourself
-                        let intro = Request::Introduction(IntroductionRequest {
-                            player: Player {
-                                name: format!("player{}", id),
-                            },
-                        });
-                        let intro_line =
-                            serde_json::to_string(&intro).expect("serialization to work");
-                        lines.send(intro_line).await.expect("server to be up");
-                        // get response from server
-                        let line = lines.next().await.expect("server to respond").expect("");
-                        let response: Response =
-                            serde_json::from_str(&line).expect("serialization to work");
-                        Ok((lines, response))
-                    }
-                    Err(e) => Err(e),
-                }
-            }));
-        }
-
-        // Wait for all clients to get a request through.
-        let mut clients = Vec::with_capacity(NUM_CLIENTS);
-        while let Some(client_task) = connections.next().await {
-            let client = client_task.expect("client");
-            clients.push(client);
-        }
-
-        // Ensure every client successfully introduced themselves.
-        for client in clients.iter() {
-            let &(_, ref response) = client.as_ref().expect("clients to succeed");
-            assert_eq!(
-                response,
-                &Response::Introduction(IntroductionResponse::Success)
-            );
-        }
-
-        // Tell server to shutdown.
-        shutdown_tx.send(()).expect("server still running");
-        let stats = server
-            .await
-            .expect("server shutdown smoothly")
-            .expect("server shutdown smoothly");
-
-        // Ensure the server agrees with us.
-        assert_eq!(stats.total_accepted_connections, NUM_CLIENTS);
-        drop(clients);
-    }
 }

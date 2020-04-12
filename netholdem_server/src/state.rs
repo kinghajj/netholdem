@@ -1,3 +1,6 @@
+// TODO: remove this!
+#![allow(dead_code)]
+
 use std::collections::{btree_map, hash_map, BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};

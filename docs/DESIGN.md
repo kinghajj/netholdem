@@ -19,13 +19,12 @@ responses, to update clients of relevant changes to the game state.
 
 ## Server
 
-The server uses tokio to be completely asynchronous, spawning one task for each
-client connection. The state is kept in an `Arc<Mutex<_>>`, a clone of which is
-made for each client task. The top level of the state will contain globally
-relevant details, such as the set of players and open rooms. The state for each
-room, though, will also be kept in an `Arc<Mutex<_>>`. This way, when a client
-is playing in a room, their actions will only need to synchronize on the room's
-mutex, and not the global state mutex.
+The server uses tokio to be completely asynchronous. The state is kept in an a
+shared mutex. The top level of the state will contain globally relevant details,
+such as the set of clients, players, and open rooms. The state for each room,
+though, is kept in separate shared mutexes. This way, when clients play in a
+room, their actions will only need to synchronize on the room's mutex, and not
+the global state mutex.
 
 ## Client
 

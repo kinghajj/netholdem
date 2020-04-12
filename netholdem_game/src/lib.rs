@@ -1,4 +1,6 @@
 #![warn(rust_2018_idioms)]
+// TODO: remove this!
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 

@@ -8,20 +8,17 @@ use log::{error, LevelFilter};
 use tokio;
 use tokio::sync::oneshot;
 
-mod requests;
-mod server;
-mod settings;
-mod state;
+use netholdem_server::{run, settings};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let settings = settings::load()?;
     setup_logger(&settings.logging)?;
     let mut runtime = setup_runtime(&settings.runtime)?;
 
-    Ok(runtime.block_on(async move {
+    runtime.block_on(async move {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
-            if let Err(e) = server::run(settings.server, shutdown_rx).await {
+            if let Err(e) = run(settings.server, shutdown_rx).await {
                 error!("server stopped: {}", e);
             }
         });
@@ -30,7 +27,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Err(e) = server.await {
             error!("server task: {}", e);
         }
-    }))
+    });
+    Ok(())
 }
 
 fn setup_logger(l: &settings::Logging) -> Result<(), Box<dyn Error>> {
