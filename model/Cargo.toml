@@ -1,5 +1,5 @@
 [package]
-name = "netholdem_model"
+name = "netholdem-model"
 version = "0.1.0"
 description = "Model a terminal-based networked Texas Hold'em Poker game."
 authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]

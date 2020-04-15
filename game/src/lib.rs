@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use netholdem_model::{FlatDeck, Hand, Player};
+use rs_poker::core::Rankable;
 
 struct State {
     deck: FlatDeck,

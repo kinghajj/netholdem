@@ -2,20 +2,21 @@
 
 ## Workspace
 
-* `client` - the client program.
+* `client` - the client program, embedded as WebAssembly in the UI.
 * `game` - core logic for Texas Hold'em.
 * `model` - key data structures for the game, client, and server.
 * `protocol` - request/response DTOs exchanged between the server and clients.
-* `server` - the server program.
+* `server` - the HTTP/Websocket server program.
+* `ui` - the web frontend.
 
 ## Protocol
 
 The protocol between the client and server is pretty straightforward: a long-
-lived TCP stream exchanges requests and responses to/from the server and client,
-respectively. These messages are encoded as JSON text, and each message is
-delimited by a newline. Every request sent by the client will result in one,
-and only one, response. The server will, however, also send unsolicited
-responses, to update clients of relevant changes to the game state.
+lived Websocket stream exchanges requests and responses to/from the server and
+client, respectively. These messages are binary-encoded with `bincode`. Every
+request sent by the client will result in one, and only one, response. The
+server will, however, also send unsolicited responses, to update clients of
+relevant changes to the game state.
 
 ## Server
 
@@ -28,5 +29,7 @@ the global state mutex.
 
 ## Client
 
-The client program is written synchronously, though with multiple threads,
-using channels for concurrency.
+The client program core is written in Rust and compiled to WebAssembly. The UI
+is written in TypeScript with React, binding user actions to calls into the
+client core; the core, in turn, updates its state, and notifies React components
+to be re-rendered.

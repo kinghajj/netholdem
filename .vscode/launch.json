@@ -6,8 +6,8 @@
             "type": "lldb",
             "request": "launch",
             "preLaunchTask": "Build (debug)",
-            "program": "${workspaceFolder}/target/debug/netholdem_server",
-            "cwd": "${workspaceFolder}/netholdem_server",
+            "program": "${workspaceFolder}/target/debug/netholdem-server",
+            "cwd": "${workspaceFolder}/server",
             "env": {"NETHOLDEM_SERVER_RUN_MODE": "development"}
         },
         {

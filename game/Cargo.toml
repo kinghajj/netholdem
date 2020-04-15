@@ -1,5 +1,5 @@
 [package]
-name = "netholdem_game"
+name = "netholdem-game"
 description = "Core logic for a terminal-based networked Texas Hold'em Poker game."
 version = "0.1.0"
 authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
@@ -7,6 +7,7 @@ edition = "2018"
 
 [dependencies]
 log = "0.4"
-netholdem_model = { path = "../netholdem_model" }
-netholdem_protocol = { path = "../netholdem_protocol" }
+netholdem-model = { path = "../model" }
+netholdem-protocol = { path = "../protocol" }
+rs_poker = "1.0"
 serde = { version = "1.0", features = ["derive"] }

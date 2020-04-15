@@ -1,6 +1,6 @@
 [package]
-name = "netholdem_server"
-description = "Server for a terminal-based networked Texas Hold'em Poker game."
+name = "netholdem-server"
+description = "Server for a Texas Hold'em Poker game."
 version = "0.1.0"
 authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
 license = "MIT"
@@ -8,17 +8,21 @@ edition = "2018"
 
 [dependencies]
 async-local-bounded-channel = "0.1.0"
+bincode = "1.2"
 config = "0.10"
 flexi_logger = "0.15"
 futures = "0.3"
 log = "0.4"
-netholdem_game = { path = "../netholdem_game" }
-netholdem_model = { path = "../netholdem_model" }
-netholdem_protocol = { path = "../netholdem_protocol" }
+netholdem-game = { path = "../game" }
+netholdem-model = { path = "../model" }
+netholdem-protocol = { path = "../protocol" }
 num_cpus = "1.12"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 snafu = "0.6"
 tokio = { version = "0.2", features = ["full"] }
-tokio-util = { version = "0.3", features = ["full"] }
 typenum = "1.11"
+warp = "0.2"
+
+[dev-dependencies]
+tungstenite = "0.10"
+tokio-tungstenite = "0.10"

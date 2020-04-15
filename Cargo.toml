@@ -1,13 +1,16 @@
 [workspace]
 members = [
-    "netholdem_client",
-    "netholdem_game",
-    "netholdem_model",
-    "netholdem_protocol",
-    "netholdem_server",
+    "client",
+    "game",
+    "model",
+    "protocol",
+    "server",
 ]
 
 [profile.release]
 lto = true
 debug = 1
 incremental = false
+
+[profile.release.package.netholdem-client]
+opt-level = "s"

@@ -1,10 +1,14 @@
 {
     "cSpell.words": [
+        "bincode",
         "cpus",
         "docopt",
         "flexi",
         "hold'em",
         "netholdem",
-        "oneshot"
+        "oneshot",
+        "spsc",
+        "tungstenite",
+        "typenum"
     ]
 }

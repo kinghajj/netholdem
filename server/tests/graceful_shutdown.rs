@@ -2,10 +2,8 @@ use futures::stream::futures_unordered::FuturesUnordered;
 use futures::SinkExt;
 use std::time::Duration;
 
-use tokio::net::TcpStream;
 use tokio::stream::StreamExt;
 use tokio::sync::oneshot;
-use tokio_util::codec::{Framed, LinesCodec};
 
 use netholdem_model::Player;
 use netholdem_protocol::{IntroductionRequest, IntroductionResponse, Request, Response};
@@ -25,9 +23,11 @@ async fn graceful_shutdown() {
         .start()
         .expect("logger to start");
     // Spawn server.
-    let bind_addr = "127.0.0.1:8023";
+    let bind_addr = "127.0.0.1:3000";
+    let client_bind_addr = "ws://127.0.0.1:3000/server";
     let settings = settings::Server {
         bind_addr: bind_addr.into(),
+        client_files_path: "./".into(),
     };
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = tokio::spawn(async move { run(settings, shutdown_rx).await.ok() });
@@ -40,22 +40,29 @@ async fn graceful_shutdown() {
     let mut connections = FuturesUnordered::new();
     for id in 0..NUM_CLIENTS {
         connections.push(tokio::spawn(async move {
-            match TcpStream::connect(bind_addr).await {
-                Ok(stream) => {
-                    let mut lines = Framed::new(stream, LinesCodec::new());
+            match tokio_tungstenite::connect_async(client_bind_addr).await {
+                Ok((mut stream, _)) => {
                     // introduce ourself
                     let intro = Request::Introduction(IntroductionRequest {
                         player: Player {
                             name: format!("player{}", id),
                         },
                     });
-                    let intro_line = serde_json::to_string(&intro).expect("serialization to work");
-                    lines.send(intro_line).await.expect("server to be up");
+                    let intro_bytes = bincode::serialize(&intro).expect("serialization to work");
+                    stream
+                        .send(tungstenite::Message::binary(intro_bytes))
+                        .await
+                        .expect("server to be up");
                     // get response from server
-                    let line = lines.next().await.expect("server to respond").expect("");
+                    let resp_bytes = stream
+                        .next()
+                        .await
+                        .expect("server to respond")
+                        .expect("response to be successful")
+                        .into_data();
                     let response: Response =
-                        serde_json::from_str(&line).expect("serialization to work");
-                    Ok((lines, response))
+                        bincode::deserialize(&resp_bytes).expect("serialization to work");
+                    Ok((stream, response))
                 }
                 Err(e) => Err(e),
             }

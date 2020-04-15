@@ -7,17 +7,17 @@ use serde::Deserialize;
 pub fn load() -> Result<Settings, ConfigError> {
     let mut s = Config::new();
     s.merge(File::with_name(DEFAULT_CFG_PATH))?;
-    let env = env::var(RUN_MODE_ENV).unwrap_or("development".into());
+    let env = env::var(RUN_MODE_ENV).unwrap_or_else(|_| "development".into());
     s.merge(File::with_name(&format!("config/{}", env)).required(false))?;
     s.merge(File::with_name(LOCAL_CFG_PATH).required(false))?;
     s.merge(Environment::with_prefix(ENV_PREFIX))?;
     s.try_into()
 }
 
-const DEFAULT_CFG_PATH: &'static str = "config/default";
-const LOCAL_CFG_PATH: &'static str = "config/local";
-const RUN_MODE_ENV: &'static str = "NETHOLDEM_SERVER_RUN_MODE";
-const ENV_PREFIX: &'static str = "netholdem_server";
+const DEFAULT_CFG_PATH: &str = "config/default";
+const LOCAL_CFG_PATH: &str = "config/local";
+const RUN_MODE_ENV: &str = "NETHOLDEM_SERVER_RUN_MODE";
+const ENV_PREFIX: &str = "netholdem_server";
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Settings {
@@ -62,12 +62,14 @@ impl Default for Runtime {
 #[derive(Debug, Deserialize)]
 pub struct Server {
     pub bind_addr: String,
+    pub client_files_path: String,
 }
 
 impl Default for Server {
     fn default() -> Self {
         Server {
-            bind_addr: "127.0.0.1:8023".into(),
+            bind_addr: "127.0.0.1:3000".into(),
+            client_files_path: "./ui/".into(),
         }
     }
 }
