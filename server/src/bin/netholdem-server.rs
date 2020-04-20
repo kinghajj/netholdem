@@ -4,7 +4,7 @@ use std::error::Error;
 use std::str::FromStr;
 
 use flexi_logger::LogSpecBuilder;
-use log::{error, LevelFilter};
+use log::{error, warn, LevelFilter};
 use tokio;
 use tokio::sync::oneshot;
 
@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     runtime.block_on(async move {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
-            if let Err(e) = run(settings.server, shutdown_rx).await {
+            if let Err(e) = run(settings.server, settings.game, shutdown_rx).await {
                 error!("server stopped: {}", e);
             }
         });
@@ -43,10 +43,20 @@ fn setup_logger(l: &settings::Logging) -> Result<(), Box<dyn Error>> {
 
 fn setup_runtime(r: &settings::Runtime) -> Result<tokio::runtime::Runtime, Box<dyn Error>> {
     let mut builder = tokio::runtime::Builder::default();
+    let adjusted_max_threads = if r.core_threads >= r.max_threads {
+        let max_threads = r.core_threads + 1;
+        warn!(
+            "max_threads must be greater than core_threads; adjusting to {}",
+            max_threads
+        );
+        max_threads
+    } else {
+        r.max_threads
+    };
     builder
         .enable_all()
         .core_threads(r.core_threads)
-        .max_threads(r.max_threads)
+        .max_threads(adjusted_max_threads)
         .thread_name(&r.thread_name);
     if r.threaded {
         builder.threaded_scheduler();

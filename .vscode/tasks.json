@@ -23,6 +23,22 @@
             "group": "build"
         },
         {
+            "label": "Build WASM (release)",
+            "type": "shell",
+            "command": "wasm-pack build --release client",
+            "group": "build"
+        },
+        {
+            "label": "Run UI dev server",
+            "type": "shell",
+            "dependsOn": ["Build WASM (release)"],
+            "group": "none",
+            "command": "npm run start",
+            "options": {
+                "cwd": "${workspaceFolder}/ui"
+            }
+        },
+        {
             "label": "All Tests",
             "type": "shell",
             "command": "cargo test",

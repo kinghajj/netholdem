@@ -5,8 +5,8 @@ use std::time::Duration;
 use tokio::stream::StreamExt;
 use tokio::sync::oneshot;
 
-use netholdem_model::Player;
-use netholdem_protocol::{IntroductionRequest, IntroductionResponse, Request, Response};
+use netholdem_game::protocol::{IntroductionRequest, IntroductionResponse, Request, Response};
+use netholdem_game::server;
 use netholdem_server::{run, settings};
 
 // Ensure that:
@@ -23,31 +23,28 @@ async fn graceful_shutdown() {
         .start()
         .expect("logger to start");
     // Spawn server.
-    let bind_addr = "127.0.0.1:3000";
-    let client_bind_addr = "ws://127.0.0.1:3000/server";
+    let bind_addr = "127.0.0.1:8080";
+    let client_bind_addr = "ws://127.0.0.1:8080/server";
     let settings = settings::Server {
         bind_addr: bind_addr.into(),
         client_files_path: "./".into(),
     };
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server = tokio::spawn(async move { run(settings, shutdown_rx).await.ok() });
+    let game = server::Settings::default();
+    let server = tokio::spawn(async move { run(settings, game, shutdown_rx).await.ok() });
 
     // Hack: wait a bit for the server to be ready.
-    tokio::time::delay_for(Duration::from_millis(15)).await;
+    tokio::time::delay_for(Duration::from_millis(150)).await;
 
     // Spawn many clients in parallel.
     const NUM_CLIENTS: usize = 1000;
     let mut connections = FuturesUnordered::new();
-    for id in 0..NUM_CLIENTS {
+    for _id in 0..NUM_CLIENTS {
         connections.push(tokio::spawn(async move {
             match tokio_tungstenite::connect_async(client_bind_addr).await {
                 Ok((mut stream, _)) => {
                     // introduce ourself
-                    let intro = Request::Introduction(IntroductionRequest {
-                        player: Player {
-                            name: format!("player{}", id),
-                        },
-                    });
+                    let intro = Request::Introduction(IntroductionRequest::default());
                     let intro_bytes = bincode::serialize(&intro).expect("serialization to work");
                     stream
                         .send(tungstenite::Message::binary(intro_bytes))
@@ -79,10 +76,10 @@ async fn graceful_shutdown() {
     // Ensure every client successfully introduced themselves.
     for client in clients.iter() {
         let &(_, ref response) = client.as_ref().expect("clients to succeed");
-        assert_eq!(
-            response,
-            &Response::Introduction(IntroductionResponse::Success)
-        );
+        assert!(match response {
+            &Response::Introduction(IntroductionResponse::Success) => true,
+            _ => false,
+        });
     }
 
     // Tell server to shutdown.

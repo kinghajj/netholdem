@@ -8,8 +8,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{BinaryType, ErrorEvent, MessageEvent, WebSocket};
 
-use netholdem_model::Player;
-use netholdem_protocol::{IntroductionRequest, Request, Response};
+use netholdem_game::protocol::{IntroductionRequest, Request, Response};
 
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
@@ -41,8 +40,8 @@ pub struct Client {
 #[wasm_bindgen]
 impl Client {
     pub fn connect() -> Result<Client, JsValue> {
-        let (request_tx, request_rx) = mpsc::channel(8);
-        let (response_tx, response_rx) = mpsc::channel(8);
+        let (request_tx, _request_rx) = mpsc::channel(8);
+        let (_response_tx, response_rx) = mpsc::channel(8);
         let state = Rc::new(RefCell::new(State::new(request_tx, response_rx)));
         let ws = connect()?;
         ws.set_binary_type(BinaryType::Arraybuffer);
@@ -73,9 +72,7 @@ impl Client {
         let cloned_ws = ws.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
             console_log!("socket opened");
-            let request = Request::Introduction(IntroductionRequest {
-                player: Player { name: "Sam".into() },
-            });
+            let request = Request::Introduction(IntroductionRequest::default());
             let request_bytes: Vec<u8> =
                 bincode::serialize(&request).expect("serialization to work");
             match cloned_ws.send_with_u8_array(&request_bytes) {

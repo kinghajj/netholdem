@@ -2,8 +2,6 @@
 members = [
     "client",
     "game",
-    "model",
-    "protocol",
     "server",
 ]
 

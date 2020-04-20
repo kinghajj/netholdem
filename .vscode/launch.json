@@ -9,16 +9,6 @@
             "program": "${workspaceFolder}/target/debug/netholdem-server",
             "cwd": "${workspaceFolder}/server",
             "env": {"NETHOLDEM_SERVER_RUN_MODE": "development"}
-        },
-        {
-            "name": "Debug client",
-            "type": "lldb",
-            "request": "launch",
-            "preLaunchTask": "Build (debug)",
-            "program": "${workspaceFolder}/target/debug/netholdem_client",
-            "cwd": "${workspaceFolder}",
-            "args": ["0.0.0.0:8023"],
-            "env": {"RUST_LOG": "debug"}
         }
     ]
 }

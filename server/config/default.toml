@@ -8,5 +8,8 @@ max_threads = 16
 thread_name = "async-worker"
 
 [server]
-bind_addr = "127.0.0.1:3000"
+bind_addr = "127.0.0.1:8080"
 client_files_path = "./ui/"
+
+[game]
+max_players_cap = 8

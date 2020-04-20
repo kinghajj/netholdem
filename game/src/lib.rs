@@ -4,8 +4,12 @@
 
 use std::collections::HashMap;
 
-use netholdem_model::{FlatDeck, Hand, Player};
-use rs_poker::core::Rankable;
+use crate::model::{FlatDeck, Hand, Player};
+
+pub mod client;
+pub mod model;
+pub mod protocol;
+pub mod server;
 
 struct State {
     deck: FlatDeck,
@@ -17,3 +21,5 @@ struct PlayerState {
 }
 
 enum Phase {}
+
+const GAME_VERSION: &'static str = env!("CARGO_PKG_VERSION");

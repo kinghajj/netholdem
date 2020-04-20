@@ -24,6 +24,7 @@ pub struct Settings {
     pub logging: Logging,
     pub runtime: Runtime,
     pub server: Server,
+    pub game: netholdem_game::server::Settings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,7 +69,7 @@ pub struct Server {
 impl Default for Server {
     fn default() -> Self {
         Server {
-            bind_addr: "127.0.0.1:3000".into(),
+            bind_addr: "127.0.0.1:8080".into(),
             client_files_path: "./ui/".into(),
         }
     }
