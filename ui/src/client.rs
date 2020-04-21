@@ -40,6 +40,14 @@ pub struct Client {
 #[wasm_bindgen]
 impl Client {
     pub fn connect() -> Result<Client, JsValue> {
+        /*
+        use rand::rngs::OsRng;
+        use x25519_dalek::{EphemeralSecret, PublicKey};
+        let secret = EphemeralSecret::new(&mut OsRng);
+        let public = PublicKey::from(&secret);
+        console_log!("{:?}", public.as_bytes());
+        */
+
         let (request_tx, _request_rx) = mpsc::channel(8);
         let (_response_tx, response_rx) = mpsc::channel(8);
         let state = Rc::new(RefCell::new(State::new(request_tx, response_rx)));

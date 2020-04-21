@@ -6,6 +6,14 @@ authors = ["Samuel Fredrickson <samfredrickson@gmail.com>"]
 license = "MIT"
 edition = "2018"
 
+[package.metadata.deb]
+assets = [
+    # server executable
+    ["target/release/netholdem-server", "opt/netholdem/", "755"],
+    ["config/default.toml", "opt/netholdem/config/", "644"],
+    ["../ui/build/*", "opt/netholdem/ui", "644"],
+]
+
 [dependencies]
 async-local-bounded-channel = "0.1.0"
 bincode = "1.2"

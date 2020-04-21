@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 /// The core business logic of the server.
 use std::default::Default;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -27,9 +27,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self {
-            max_players_cap: 8,
-        }
+        Self { max_players_cap: 8 }
     }
 }
 
@@ -53,10 +51,7 @@ impl Core {
     ///
     /// The returned context provides the client-handling task the means to
     /// execute incoming requests.
-    pub async fn register(
-        &self,
-        response_tx: mpsc::Sender<protocol::Response>,
-    ) -> Context<'_> {
+    pub async fn register(&self, response_tx: mpsc::Sender<protocol::Response>) -> Context<'_> {
         let client_id = model::ClientId(self.next_client_id.fetch_add(1, Ordering::SeqCst));
         Context::new(self, client_id, response_tx)
     }

@@ -1,14 +1,14 @@
 [workspace]
 members = [
-    "client",
     "game",
     "server",
+    "ui",
 ]
 
 [profile.release]
 lto = true
-debug = 1
+debug = 0
 incremental = false
 
-[profile.release.package.netholdem-client]
-opt-level = "s"
+[profile.release.package.netholdem-ui]
+opt-level = 3
