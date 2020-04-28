@@ -1,4 +1,4 @@
-use yew::{html, Component, ComponentLink, Html, ShouldRender, Properties};
+use yew::{html, Component, ComponentLink, Html, ShouldRender};
 
 use crate::client::Client;
 
@@ -29,8 +29,15 @@ impl Component for App {
 
     fn view(&self) -> Html {
         html! {
-            <div>
-                <button onclick=self.link.callback(|_| Msg::Click)>{ "Click" }</button>
+            <div class="window" style="margin: 32px; width: 250px">
+                <div class="title-bar">
+                    <div class="title-bar-text">
+                        { "Net Holdem" }
+                    </div>
+                </div>
+                <div class="window-body">
+                    <button onclick=self.link.callback(|_| Msg::Click)>{ "Click" }</button>
+                </div>
             </div>
         }
     }

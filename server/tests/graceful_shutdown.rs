@@ -1,10 +1,13 @@
+use std::time::Duration;
+
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::SinkExt;
-use std::time::Duration;
+use rand::rngs::OsRng;
 
 use tokio::stream::StreamExt;
 use tokio::sync::oneshot;
 
+use netholdem_game::model;
 use netholdem_game::protocol::{IntroductionRequest, IntroductionResponse, Request, Response};
 use netholdem_game::server;
 use netholdem_server::{run, settings};
@@ -44,7 +47,10 @@ async fn graceful_shutdown() {
             match tokio_tungstenite::connect_async(client_bind_addr).await {
                 Ok((mut stream, _)) => {
                     // introduce ourself
-                    let intro = Request::Introduction(IntroductionRequest::default());
+                    let secret = x25519_dalek::EphemeralSecret::new(&mut OsRng);
+                    let public_key = x25519_dalek::PublicKey::from(&secret);
+                    let client_id = model::EndpointId(public_key.as_bytes().clone());
+                    let intro = Request::Introduction(IntroductionRequest::new(client_id));
                     let intro_bytes = bincode::serialize(&intro).expect("serialization to work");
                     stream
                         .send(tungstenite::Message::binary(intro_bytes))
@@ -77,7 +83,7 @@ async fn graceful_shutdown() {
     for client in clients.iter() {
         let &(_, ref response) = client.as_ref().expect("clients to succeed");
         assert!(match response {
-            &Response::Introduction(IntroductionResponse::Success) => true,
+            &Response::Introduction(IntroductionResponse::NiceToMeetYou { .. }) => true,
             _ => false,
         });
     }

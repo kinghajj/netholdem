@@ -12,6 +12,6 @@ log = "0.4"
 orion = "0.15"
 rand = "0.7"
 rand_core = "0.5"
-rs_poker = "1.0"
+rs_poker = { git = "https://github.com/kinghajj/rs-poker", branch = "serde" }
 serde = { version = "1.0", features = ["derive"] }
 x25519-dalek = "0.6"

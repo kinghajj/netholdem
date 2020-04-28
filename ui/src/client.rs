@@ -1,13 +1,16 @@
 #![warn(rust_2018_idioms)]
 
-use futures::channel::mpsc;
-use js_sys::Uint8Array;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+use futures::channel::mpsc;
+use js_sys::Uint8Array;
+use rand::rngs::OsRng;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{BinaryType, ErrorEvent, MessageEvent, WebSocket};
 
+use netholdem_game::model;
 use netholdem_game::protocol::{IntroductionRequest, Request, Response};
 
 macro_rules! console_log {
@@ -80,7 +83,10 @@ impl Client {
         let cloned_ws = ws.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
             console_log!("socket opened");
-            let request = Request::Introduction(IntroductionRequest::default());
+            let secret = x25519_dalek::EphemeralSecret::new(&mut OsRng);
+            let public_key = x25519_dalek::PublicKey::from(&secret);
+            let client_id = model::EndpointId(public_key.as_bytes().clone());
+            let request = Request::Introduction(IntroductionRequest::new(client_id));
             let request_bytes: Vec<u8> =
                 bincode::serialize(&request).expect("serialization to work");
             match cloned_ws.send_with_u8_array(&request_bytes) {

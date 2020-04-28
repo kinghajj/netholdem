@@ -2,12 +2,15 @@
     "cSpell.words": [
         "bincode",
         "cpus",
+        "dalek",
+        "diffie",
         "docopt",
         "flexi",
         "hold'em",
         "keyphrase",
         "netholdem",
         "oneshot",
+        "rngs",
         "spsc",
         "tungstenite",
         "typenum"
