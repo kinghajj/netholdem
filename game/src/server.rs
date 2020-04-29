@@ -1,5 +1,6 @@
 /// The core business logic of the server.
 use std::collections::BTreeMap;
+use std::convert::From;
 use std::default::Default;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -13,6 +14,9 @@ use rand::rngs::OsRng;
 use serde::Deserialize;
 
 use crate::{model, protocol};
+use model::*;
+use protocol::{Request, Response};
+
 use Phase::*;
 
 pub struct Core {
@@ -53,12 +57,13 @@ impl Core {
     ///
     /// The returned context provides the client-handling task the means to
     /// execute incoming requests.
-    pub async fn register(&self, response_tx: mpsc::Sender<protocol::Response>) -> Context<'_> {
-        Context::new(self, response_tx)
+    pub async fn register(&self, tx: mpsc::Sender<Response>) -> Context<'_> {
+        Context::new(self, tx)
     }
 
-    async fn new_room(&self, cfg: model::RoomConfig) -> Synced<Room> {
-        let room_id = model::RoomId(self.next_room_id.fetch_add(1, Ordering::SeqCst));
+    async fn new_room(&self, cfg: RoomConfig) -> Synced<Room> {
+        let room_id = self.next_room_id.fetch_add(1, Ordering::SeqCst);
+        let room_id = RoomId(room_id);
         let room = Room::new(room_id, cfg);
         let room = make_synced(room);
         self.rooms.lock().await.insert(room_id, room.clone());
@@ -69,16 +74,16 @@ impl Core {
 /// The handle by which client tasks may send requests to the core.
 pub struct Context<'core> {
     core: &'core Core,
-    response_tx: mpsc::Sender<protocol::Response>,
+    response_tx: mpsc::Sender<Response>,
     phase: Phase,
 }
 
 impl<'core> Context<'core> {
-    fn new(core: &'core Core, response_tx: mpsc::Sender<protocol::Response>) -> Self {
+    fn new(core: &'core Core, response_tx: mpsc::Sender<Response>) -> Self {
         Context {
             core,
             response_tx,
-            phase: New,
+            phase: New(NewPhase),
         }
     }
 
@@ -86,7 +91,7 @@ impl<'core> Context<'core> {
     ///
     /// This does not return a value, but rather sends a response to the
     /// channel provided to `Core::register`.
-    pub async fn execute(&mut self, req: protocol::Request) {
+    pub async fn execute(&mut self, req: Request) {
         let response = self.handle(req).await;
         self.response_tx
             .send(response)
@@ -104,8 +109,8 @@ impl<'core> Context<'core> {
     }
 
     // Top-level request-handling function.
-    async fn handle(&mut self, req: protocol::Request) -> protocol::Response {
-        let phase = std::mem::replace(&mut self.phase, New);
+    async fn handle(&mut self, req: Request) -> Response {
+        let phase = std::mem::replace(&mut self.phase, New(NewPhase));
         let (phase, response) = phase.handle(self, req).await;
         self.phase = phase;
         response
@@ -117,151 +122,93 @@ enum Phase {
     // A client that has just connected and registered, but not yet introduced
     // themselves, is in the `New` phase. The only valid request from such
     // clients is an introduction.
-    New,
+    New(NewPhase),
     // If a client has introduced themselves and the client ID is remembered,
     // they are in the `Pending` phase, until they successfully authenticate.
-    Pending {
-        status: Synced<ClientStatus>,
-        challenge: [u8; protocol::CHALLENGE_SIZE],
-        secret: SecretKey,
-    },
+    Pending(PendingPhase),
     // Once a client has introduced themselves successfully--and authenticated,
     // if they are returning--they are in the `Validated` phase. They may only
     // create or join rooms in which to play.
-    Validated {
-        status: Synced<ClientStatus>,
-    },
+    Validated(ValidatedPhase),
     // Clients which have created or joined rooms are in the `Playing` phase.
-    Playing {
-        status: Synced<ClientStatus>,
-        room: Synced<Room>,
-    },
+    Playing(PlayingPhase),
+}
+
+struct NewPhase;
+
+impl From<NewPhase> for Phase {
+    fn from(p: NewPhase) -> Self {
+        Phase::New(p)
+    }
+}
+
+struct PendingPhase {
+    status: Synced<ClientStatus>,
+    challenge: [u8; protocol::CHALLENGE_SIZE],
+    secret: SecretKey,
+}
+
+impl From<PendingPhase> for Phase {
+    fn from(p: PendingPhase) -> Self {
+        Phase::Pending(p)
+    }
+}
+
+struct ValidatedPhase {
+    status: Synced<ClientStatus>,
+}
+
+impl From<ValidatedPhase> for Phase {
+    fn from(p: ValidatedPhase) -> Self {
+        Phase::Validated(p)
+    }
+}
+
+struct PlayingPhase {
+    status: Synced<ClientStatus>,
+    room: Synced<Room>,
+}
+
+impl From<PlayingPhase> for Phase {
+    fn from(p: PlayingPhase) -> Self {
+        Phase::Playing(p)
+    }
 }
 
 impl Phase {
     // Main request handling function.
-    async fn handle<'core>(
-        self,
-        ctx: &mut Context<'core>,
-        req: protocol::Request,
-    ) -> (Self, protocol::Response) {
-        use protocol::Request::*;
+    async fn handle<'core>(self, ctx: &mut Context<'core>, req: Request) -> (Self, Response) {
+        use Request::*;
+        use Response::Illegal;
         match self {
-            New => {
-                use protocol::IntroductionResponse::*;
-                use ClientRegistration::*;
-                if let &Introduction(ref intro) = &req {
-                    if &intro.version.0 == crate::GAME_VERSION {
-                        let (client_reg, status) =
-                            ctx.core.clients.lock().await.register(&intro.client_id);
-                        match client_reg {
-                            NotRemembered { server_id } => {
-                                (Validated { status }, NiceToMeetYou { server_id }.into())
-                            }
-                            Remembered { challenge, secret } => (
-                                Pending {
-                                    status,
-                                    challenge,
-                                    secret,
-                                },
-                                YouSeemFamiliar { challenge }.into(),
-                            ),
-                        }
-                    } else {
-                        (self, MismatchedGameVersions.into())
-                    }
-                } else {
-                    (self, protocol::Response::Illegal)
+            New(p) => match req {
+                Introduction(intro) => {
+                    let (phase, resp) = handle_intro(intro, p, ctx).await;
+                    (phase, resp.into())
                 }
-            }
-            Pending {
-                status,
-                challenge,
-                secret,
-            } => {
-                use protocol::AuthenticationResponse::*;
-                if let &Authentication(ref auth) = &req {
-                    if let Ok(tag) = Tag::from_slice(&auth.tag) {
-                        let res = authenticate_verify(&tag, &secret, &challenge);
-                        if res.is_ok() {
-                            // todo: send back relevant state information!
-                            (Validated { status }, Valid.into())
-                        } else {
-                            (
-                                Pending {
-                                    status,
-                                    challenge,
-                                    secret,
-                                },
-                                Invalid.into(),
-                            )
-                        }
-                    } else {
-                        (
-                            Pending {
-                                status,
-                                challenge,
-                                secret,
-                            },
-                            Invalid.into(),
-                        )
-                    }
-                } else {
-                    (
-                        Pending {
-                            status,
-                            challenge,
-                            secret,
-                        },
-                        protocol::Response::Illegal,
-                    )
-                }
-            }
-            Validated { status } => match req {
-                CreateRoom(cr_req) => {
-                    use protocol::CreateRoomResponse;
-                    // create the room
-                    let room = ctx.core.new_room(cr_req.config).await;
-                    // creator auto-joins the room.
-                    let room_id = {
-                        let mut room = room.lock().await;
-                        room.add_member(ctx, &cr_req.player).await;
-                        room.room_id
-                    };
-                    (
-                        Playing {
-                            status,
-                            room: room.clone(),
-                        },
-                        CreateRoomResponse { room_id }.into(),
-                    )
-                }
-                JoinRoom(jr_req) => {
-                    use protocol::JoinRoomResponse::*;
-                    if let Some(room) = ctx.core.rooms.lock().await.lookup(jr_req.room_id) {
-                        let response = room.lock().await.join(ctx, &jr_req.player).await;
-                        let phase = if response == Success.into() {
-                            Playing {
-                                status,
-                                room: room.clone(),
-                            }
-                        } else {
-                            Validated { status }
-                        };
-                        (phase, response)
-                    } else {
-                        (Validated { status }, NotFound.into())
-                    }
-                }
-                _ => (Validated { status }, protocol::Response::Illegal),
+                _ => (New(p), Illegal),
             },
-            Playing { .. } => (self, protocol::Response::Illegal),
+            Pending(p) => match req {
+                Authentication(auth) => {
+                    let (phase, resp) = handle_auth(auth, p, ctx).await;
+                    (phase, resp.into())
+                }
+                _ => (Pending(p), Illegal),
+            },
+            Validated(p) => match req {
+                Lobby(l) => {
+                    let (phase, resp) = handle_lobby(l, p, ctx).await;
+                    (phase, resp.into())
+                }
+                _ => (Validated(p), Illegal),
+            },
+            Playing { .. } => (self, Illegal),
         }
     }
 }
 
 struct Clients {
-    clients: BTreeMap<model::EndpointId, Client>,
+    clients: BTreeMap<EndpointId, Client>,
 }
 
 impl Clients {
@@ -271,10 +218,7 @@ impl Clients {
         }
     }
 
-    fn register(
-        &mut self,
-        client_id: &model::EndpointId,
-    ) -> (ClientRegistration, Synced<ClientStatus>) {
+    fn register(&mut self, client_id: &EndpointId) -> (ClientRegistration, Synced<ClientStatus>) {
         use std::collections::btree_map::Entry::{Occupied, Vacant};
         match self.clients.entry(client_id.clone()) {
             // unrecognized client
@@ -286,7 +230,8 @@ impl Clients {
                 let public_key = x25519_dalek::PublicKey::from(client_id.0);
                 let shared_secret = secret.diffie_hellman(&public_key);
                 // construct the registration response
-                let server_id = model::EndpointId(server_public_key.as_bytes().clone());
+                let server_id = server_public_key.as_bytes().clone();
+                let server_id = EndpointId(server_id);
                 let ret = ClientRegistration::NotRemembered { server_id };
                 // record the new client
                 let client = e.insert(Client::new(shared_secret));
@@ -295,8 +240,9 @@ impl Clients {
             // recognized client
             Occupied(mut e) => {
                 // construct a random challenge
-                let secret = SecretKey::from_slice(e.get().shared_secret.as_bytes())
-                    .expect("key to map successfully");
+                let secret = e.get().shared_secret.as_bytes();
+                let secret = SecretKey::from_slice(secret);
+                let secret = secret.expect("key to map successfully");
                 let challenge: [u8; protocol::CHALLENGE_SIZE] = rand::random();
                 let ret = ClientRegistration::Remembered { challenge, secret };
                 let client = e.get_mut();
@@ -308,7 +254,7 @@ impl Clients {
 
 enum ClientRegistration {
     NotRemembered {
-        server_id: model::EndpointId,
+        server_id: EndpointId,
     },
     Remembered {
         challenge: [u8; protocol::CHALLENGE_SIZE],
@@ -331,7 +277,7 @@ impl Client {
 }
 
 struct ClientStatus {
-    room_id: Option<model::RoomId>,
+    room_id: Option<RoomId>,
 }
 
 impl ClientStatus {
@@ -342,7 +288,7 @@ impl ClientStatus {
 
 // The set of rooms available on the server.
 struct Rooms {
-    rooms: BTreeMap<model::RoomId, Synced<Room>>,
+    rooms: BTreeMap<RoomId, Synced<Room>>,
 }
 
 impl Rooms {
@@ -352,24 +298,24 @@ impl Rooms {
         }
     }
 
-    fn insert(&mut self, room_id: model::RoomId, room: Synced<Room>) {
+    fn insert(&mut self, room_id: RoomId, room: Synced<Room>) {
         self.rooms.insert(room_id, room);
     }
 
-    fn lookup(&self, room_id: model::RoomId) -> Option<&Synced<Room>> {
+    fn lookup(&self, room_id: RoomId) -> Option<&Synced<Room>> {
         self.rooms.get(&room_id)
     }
 }
 
 struct Room {
-    room_id: model::RoomId,
-    cfg: model::RoomConfig,
+    room_id: RoomId,
+    cfg: RoomConfig,
     members: Vec<Member>,
     // game: State,
 }
 
 impl Room {
-    fn new(room_id: model::RoomId, cfg: model::RoomConfig) -> Self {
+    fn new(room_id: RoomId, cfg: RoomConfig) -> Self {
         Room {
             room_id,
             cfg,
@@ -380,17 +326,16 @@ impl Room {
     pub async fn join(
         &mut self,
         context: &mut Context<'_>,
-        player: &model::Player,
-    ) -> protocol::Response {
+        player: &Player,
+    ) -> protocol::JoinRoomResponse {
         use protocol::JoinRoomResponse::*;
-        use protocol::Response::JoinRoom;
         if self.is_full() {
-            JoinRoom(RoomFull)
+            RoomFull
         } else if self.contains_player(player) {
-            JoinRoom(NameInUse)
+            NameInUse
         } else {
             self.add_member(context, player).await;
-            JoinRoom(Success)
+            JoinedRoom
         }
     }
 
@@ -398,13 +343,12 @@ impl Room {
         self.members.len() == self.cfg.max_players as usize
     }
 
-    fn contains_player(&self, p: &model::Player) -> bool {
+    fn contains_player(&self, p: &Player) -> bool {
         self.members.iter().any(|m| &m.player == p)
     }
 
-    async fn add_member(&mut self, context: &Context<'_>, player: &model::Player) {
-        use protocol::NewMemberResponse;
-        use protocol::Response::NewMember;
+    async fn add_member(&mut self, context: &Context<'_>, player: &Player) {
+        use protocol::PlayResponse;
 
         // add new member to collection
         self.members.push(Member {
@@ -412,9 +356,10 @@ impl Room {
             response_tx: context.response_tx.clone(),
         });
         // tell other members of the new arrival
-        let event = NewMember(NewMemberResponse {
+        let event: Response = PlayResponse::NewMember {
             player: player.clone(),
-        });
+        }
+        .into();
         for m in self.members.iter_mut() {
             // but don't tell the new player, since they get a response anyway.
             if &m.player == player {
@@ -426,17 +371,160 @@ impl Room {
 }
 
 struct Member {
-    player: model::Player,
-    response_tx: mpsc::Sender<protocol::Response>,
+    player: Player,
+    response_tx: mpsc::Sender<Response>,
 }
 
 impl Member {
-    async fn send(&mut self, r: protocol::Response) {
+    async fn send(&mut self, r: Response) {
         self.response_tx
             .send(r)
             .await
             .map_err(|e| error!("while sending response: {}", e))
             .ok();
+    }
+}
+
+// request handling
+
+async fn handle_intro<'core>(
+    intro: protocol::IntroductionRequest,
+    _: NewPhase,
+    ctx: &mut Context<'core>,
+) -> (Phase, protocol::IntroductionResponse) {
+    use protocol::IntroductionResponse::*;
+    use ClientRegistration::*;
+
+    if &intro.version.0 != crate::GAME_VERSION {
+        return (NewPhase.into(), MismatchedGameVersions);
+    }
+
+    let (client_reg, status) = {
+        let mut clients = ctx.core.clients.lock().await;
+        clients.register(&intro.client_id)
+    };
+    match client_reg {
+        NotRemembered { server_id } => (
+            ValidatedPhase { status }.into(),
+            NiceToMeetYou { server_id },
+        ),
+        Remembered { challenge, secret } => (
+            PendingPhase {
+                status,
+                challenge,
+                secret,
+            }
+            .into(),
+            YouSeemFamiliar { challenge },
+        ),
+    }
+}
+
+async fn handle_auth<'core>(
+    auth: protocol::AuthenticationRequest,
+    phase: PendingPhase,
+    _: &mut Context<'core>,
+) -> (Phase, protocol::AuthenticationResponse) {
+    let PendingPhase {
+        status,
+        challenge,
+        secret,
+    } = phase;
+    use protocol::AuthenticationResponse::*;
+    if let Ok(tag) = Tag::from_slice(&auth.tag) {
+        let res = authenticate_verify(&tag, &secret, &challenge);
+        if res.is_ok() {
+            // todo: send back relevant state information!
+            (ValidatedPhase { status }.into(), Valid)
+        } else {
+            (
+                PendingPhase {
+                    status,
+                    challenge,
+                    secret,
+                }
+                .into(),
+                Invalid,
+            )
+        }
+    } else {
+        (
+            PendingPhase {
+                status,
+                challenge,
+                secret,
+            }
+            .into(),
+            Invalid,
+        )
+    }
+}
+
+async fn handle_lobby<'core>(
+    l: protocol::LobbyRequest,
+    phase: ValidatedPhase,
+    ctx: &mut Context<'core>,
+) -> (Phase, protocol::LobbyResponse) {
+    use protocol::LobbyRequest::*;
+    match l {
+        CreateRoom(cr) => {
+            let (phase, resp) = handle_create_room(cr, phase, ctx).await;
+            (phase, resp.into())
+        }
+        JoinRoom(jr) => {
+            let (phase, resp) = handle_join_room(jr, phase, ctx).await;
+            (phase, resp.into())
+        }
+    }
+}
+
+async fn handle_create_room<'core>(
+    cr: protocol::CreateRoomRequest,
+    phase: ValidatedPhase,
+    ctx: &mut Context<'core>,
+) -> (Phase, protocol::CreateRoomResponse) {
+    use protocol::CreateRoomResponse;
+    let ValidatedPhase { status } = phase;
+
+    // create the room
+    let room = ctx.core.new_room(cr.config).await;
+    // creator auto-joins the room.
+    let room_id = {
+        let mut room = room.lock().await;
+        room.add_member(ctx, &cr.player).await;
+        room.room_id
+    };
+    (
+        PlayingPhase {
+            status,
+            room: room.clone(),
+        }
+        .into(),
+        CreateRoomResponse { room_id },
+    )
+}
+
+async fn handle_join_room<'core>(
+    jr: protocol::JoinRoomRequest,
+    phase: ValidatedPhase,
+    ctx: &mut Context<'core>,
+) -> (Phase, protocol::JoinRoomResponse) {
+    use protocol::JoinRoomResponse::*;
+    let ValidatedPhase { status } = phase;
+    if let Some(room) = ctx.core.rooms.lock().await.lookup(jr.room_id) {
+        let response = room.lock().await.join(ctx, &jr.player).await;
+        let phase = if response == JoinedRoom {
+            PlayingPhase {
+                status,
+                room: room.clone(),
+            }
+            .into()
+        } else {
+            ValidatedPhase { status }.into()
+        };
+        (phase, response)
+    } else {
+        (ValidatedPhase { status }.into(), RoomNotFound)
     }
 }
 

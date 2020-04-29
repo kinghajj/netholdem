@@ -10,10 +10,8 @@ use crate::model::{Player, RoomConfig, RoomId};
 pub enum Request {
     Introduction(IntroductionRequest),
     Authentication(AuthenticationRequest),
-    CreateRoom(CreateRoomRequest),
-    JoinRoom(JoinRoomRequest),
-    SitIn,
-    SitOut,
+    Lobby(LobbyRequest),
+    Play(PlayRequest),
 }
 
 /// Every possible kind of response that a server may send.
@@ -22,30 +20,18 @@ pub enum Response {
     Illegal,
     Introduction(IntroductionResponse),
     Authentication(AuthenticationResponse),
-    CreateRoom(CreateRoomResponse),
-    JoinRoom(JoinRoomResponse),
-    NewMember(NewMemberResponse),
-    SitIn(SitInResponse),
-    SitOut(SitOutResponse),
+    Lobby(LobbyResponse),
+    Play(PlayResponse),
 }
 
-// Auxillary macros for converting inner request/response types into their
+// Auxillary macro for converting inner request/response types into their
 // outermost counterparts.
-macro_rules! request {
-    ($ty:ident, $r:ident) => {
-        impl From<$r> for Request {
-            fn from(r: $r) -> Self {
-                Request::$ty(r)
-            }
-        }
-    };
-}
 
-macro_rules! response {
-    ($ty:ident, $r:ident) => {
-        impl From<$r> for Response {
+macro_rules! derive_from {
+    ($to:ident, $ty:ident, $r:ident) => {
+        impl From<$r> for $to {
             fn from(r: $r) -> Self {
-                Response::$ty(r)
+                $to::$ty(r)
             }
         }
     };
@@ -78,7 +64,8 @@ pub struct IntroductionRequest {
     /// introduction.
     pub client_id: model::EndpointId,
 }
-request!(Introduction, IntroductionRequest);
+
+derive_from!(Request, Introduction, IntroductionRequest);
 
 impl IntroductionRequest {
     pub fn new(client_id: model::EndpointId) -> Self {
@@ -110,14 +97,14 @@ pub enum IntroductionResponse {
 /// The length of the challenge data issued from the server.
 pub const CHALLENGE_SIZE: usize = 32;
 
-response!(Introduction, IntroductionResponse);
+derive_from!(Response, Introduction, IntroductionResponse);
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AuthenticationRequest {
     pub tag: Vec<u8>,
 }
 
-request!(Authentication, AuthenticationRequest);
+derive_from!(Request, Authentication, AuthenticationRequest);
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub enum AuthenticationResponse {
@@ -125,9 +112,25 @@ pub enum AuthenticationResponse {
     Invalid,
 }
 
-response!(Authentication, AuthenticationResponse);
+derive_from!(Response, Authentication, AuthenticationResponse);
 
-/// Create a new room and have the client automatically join it.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub enum LobbyRequest {
+    /// Create a new room and have the client automatically join it.
+    CreateRoom(CreateRoomRequest),
+    JoinRoom(JoinRoomRequest),
+}
+
+derive_from!(Request, Lobby, LobbyRequest);
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub enum LobbyResponse {
+    CreateRoom(CreateRoomResponse),
+    JoinRoom(JoinRoomResponse),
+}
+
+derive_from!(Response, Lobby, LobbyResponse);
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CreateRoomRequest {
     /// The configuration settings for the new room.
@@ -136,14 +139,14 @@ pub struct CreateRoomRequest {
     pub player: Player,
 }
 
-request!(CreateRoom, CreateRoomRequest);
+derive_from!(LobbyRequest, CreateRoom, CreateRoomRequest);
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CreateRoomResponse {
     pub room_id: RoomId,
 }
 
-response!(CreateRoom, CreateRoomResponse);
+derive_from!(LobbyResponse, CreateRoom, CreateRoomResponse);
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct JoinRoomRequest {
@@ -151,31 +154,35 @@ pub struct JoinRoomRequest {
     pub player: Player,
 }
 
-request!(JoinRoom, JoinRoomRequest);
+derive_from!(LobbyRequest, JoinRoom, JoinRoomRequest);
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub enum JoinRoomResponse {
-    Success,
-    NotFound,
+    JoinedRoom,
+    RoomNotFound,
     RoomFull,
     NameInUse,
 }
 
-response!(JoinRoom, JoinRoomResponse);
+derive_from!(LobbyResponse, JoinRoom, JoinRoomResponse);
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct NewMemberResponse {
-    pub player: Player,
+pub enum PlayRequest {
+    SitIn,
+    SitOut,
 }
 
+derive_from!(Request, Play, PlayRequest);
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub enum SitInResponse {
-    Success,
+pub enum PlayResponse {
+    SatIn,
     AlreadySatIn,
+
+    SatOut,
+    AlreadySatOut,
+
+    NewMember { player: Player },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub enum SitOutResponse {
-    Success,
-    AlreadySatOut,
-}
+derive_from!(Response, Play, PlayResponse);
