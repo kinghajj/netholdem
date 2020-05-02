@@ -13,7 +13,7 @@
         {
             "label": "Build (debug)",
             "type": "shell",
-            "command": "cargo build",
+            "command": "cargo build --all --tests",
             "group": "build"
         },
         {

@@ -2,6 +2,12 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "type": "lldb",
+            "request": "attach",
+            "name": "Attach to server (debug)",
+            "program": "${workspaceFolder}/target/debug/netholdem-server"
+        },
+        {
             "name": "Debug server",
             "type": "lldb",
             "request": "launch",
