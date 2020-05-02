@@ -5,7 +5,6 @@ use futures::SinkExt;
 use rand::rngs::OsRng;
 
 use tokio::stream::StreamExt;
-use tokio::sync::oneshot;
 
 use netholdem_game::model;
 use netholdem_game::protocol::{IntroductionRequest, IntroductionResponse, Request, Response};
@@ -32,7 +31,7 @@ async fn graceful_shutdown() {
         bind_addr: bind_addr.into(),
         client_files_path: "./".into(),
     };
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = piper::chan(0);
     let game = server::Settings::default();
     let server = tokio::spawn(async move { run(settings, game, shutdown_rx).await.ok() });
 
@@ -89,7 +88,7 @@ async fn graceful_shutdown() {
     }
 
     // Tell server to shutdown.
-    shutdown_tx.send(()).expect("server still running");
+    drop(shutdown_tx);
     let stats = server
         .await
         .expect("server shutdown smoothly")

@@ -1,17 +1,16 @@
 use std::error::Error;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use async_local_bounded_channel as spsc_async;
 use futures::channel::mpsc;
-use futures::future::{select, Either};
+use futures::future::select;
 use futures::pin_mut;
 use futures::SinkExt;
 use log::{debug, error, info};
 use tokio;
 use tokio::stream::StreamExt;
-use tokio::sync::{oneshot, watch};
 
 use typenum::U2;
 use warp::filters::ws::{Message, WebSocket};
@@ -26,64 +25,103 @@ use crate::settings;
 pub async fn run(
     server: settings::Server,
     game: netholdem_game::server::Settings,
-    shutdown_rx: oneshot::Receiver<()>,
+    shutdown_rx: piper::Receiver<()>,
 ) -> Result<Stats, Box<dyn Error>> {
-    // Create the global state.
-    let guard = make_guard(game);
+    // Channel to indicate that all client tasks have terminated.
+    let (terminated_tx, terminated_rx) = piper::chan(0);
 
     // Keep track of some basic statistics.
     let total_accepted_connections = Arc::new(AtomicUsize::new(0));
-    let accepted_connections = total_accepted_connections.clone();
 
-    // Define our routes
+    // Start the HTTP & WebSocket server.
+    start_server(
+        server,
+        game,
+        shutdown_rx,
+        terminated_tx,
+        total_accepted_connections.clone(),
+    )
+    .await;
 
-    // Serve static client files
-    let client_files = warp::get().and(warp::fs::dir(server.client_files_path));
+    // Handle graceful shutdown.
+    info!("waiting for client tasks to terminate");
+    terminated_rx.recv().await;
 
-    // Accept websocket connections
-    let websocket_server = warp::path("server")
-        .and(warp::ws())
-        .and(warp::addr::remote())
-        .map(move |ws: warp::ws::Ws, addr: Option<SocketAddr>| {
-            let handle = guard.new_client();
-            let total_accepted_connections = total_accepted_connections.clone();
-            ws.on_upgrade(move |stream| async move {
-                if let Some(addr) = addr {
-                    tokio::spawn(async move {
-                        total_accepted_connections.fetch_add(1, Ordering::Release);
-                        info!("accepted connection from {}", addr);
-                        handle_client(handle, stream, addr).await;
-                    });
-                } else {
-                    error!("no address for incoming connection")
-                }
-            })
-        });
-    let routes = client_files.or(websocket_server);
-
-    // Start the server
-    let bind_addr = server
-        .bind_addr
-        .to_socket_addrs()
-        .expect("valid bind address")
-        .next()
-        .expect("at least one address");
-    let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(bind_addr, async move {
-        shutdown_rx.await.ok();
-        info!("received shutdown signal");
-    });
-    info!("running on {}", addr);
-    server.await;
-
-    info!("good-bye, world!");
     Ok(Stats {
-        total_accepted_connections: accepted_connections.load(Ordering::Acquire),
+        total_accepted_connections: total_accepted_connections.load(Ordering::Acquire),
     })
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Stats {
     pub total_accepted_connections: usize,
+}
+
+async fn start_server(
+    server: settings::Server,
+    game: netholdem_game::server::Settings,
+    shutdown_rx: piper::Receiver<()>,
+    terminated_tx: piper::Sender<()>,
+    total_accepted_connections: Arc<AtomicUsize>,
+) {
+    // Create the global state.
+    let (guard, weak_guard) = make_guard(game, shutdown_rx.clone(), terminated_tx.clone());
+
+    // Define our routes:
+
+    // * Serve static client files
+    let client_files = warp::get().and(warp::fs::dir(server.client_files_path.clone()));
+
+    // * Accept websocket connections
+    let websocket_server = warp::path("server")
+        .and(warp::ws())
+        .and(warp::addr::remote())
+        .map(move |ws: warp::ws::Ws, addr: Option<SocketAddr>| {
+            let handle = {
+                let guard = weak_guard.upgrade().expect("server running");
+                guard.new_client()
+            };
+            let total_accepted_connections = total_accepted_connections.clone();
+            ws.on_upgrade(move |stream| async move {
+                if let Some(addr) = addr {
+                    total_accepted_connections.fetch_add(1, Ordering::Release);
+                    info!("accepted connection from {}", addr);
+                    handle_client(handle, stream, addr).await;
+                } else {
+                    error!("no address for incoming connection")
+                }
+            })
+        });
+
+    let routes = client_files.or(websocket_server);
+
+    // Determine bind address
+    let bind_addr = server
+        .bind_addr
+        .to_socket_addrs()
+        .expect("valid bind address")
+        .next()
+        .expect("at least one address");
+
+    // Start the server!
+    let shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        let (addr, server) =
+            warp::serve(routes).bind_with_graceful_shutdown(bind_addr, async move {
+                shutdown_rx.recv().await;
+                info!("received shutdown notice");
+                drop(terminated_tx);
+            });
+        info!("running on {}", addr);
+
+        // Wait for the server to stop.
+        server.await;
+        info!("web server stopped");
+    });
+
+    // Wait for shutdown, then begin graceful termination.
+    shutdown.recv().await;
+    drop(guard);
 }
 
 // The limit of pending responses waiting to be sent to a particular client.
@@ -99,26 +137,23 @@ type RequestRx<'a> = spsc_async::Receiver<'a, Request, RequestCapacity>;
 
 async fn handle_client(handle: ClientHandle, stream: WebSocket, addr: SocketAddr) {
     // setup communication channels
-    let (state, stopped_rx) = handle.split();
+    let (state, shutdown_rx, terminated_tx) = handle.split();
     let (response_tx, response_rx) = mpsc::channel(RESPONSE_CAPACITY);
     let mut requests = spsc_async::channel::<Request, RequestCapacity>();
     let (request_tx, request_rx) = requests.split();
     // setup task loops
-    let connection = process_connection(stopped_rx.clone(), stream, addr, response_rx, request_tx);
-    let request = handle_requests(state, stopped_rx, addr, request_rx, response_tx);
+    let connection = process_connection(shutdown_rx.clone(), stream, addr, response_rx, request_tx);
+    let request = handle_requests(state, shutdown_rx, addr, request_rx, response_tx);
     pin_mut!(connection, request);
-    // run task loops
-    let remaining = select(connection, request).await.factor_first().1;
-    // wait for whoever is left to finish
-    match remaining {
-        Either::Left(f) => f.await,
-        Either::Right(f) => f.await,
-    }
+    // run task loops interleaved, and wait for both to finish.
+    select(connection, request).await.factor_first().1.await;
     info!("finished handling {}", addr);
+    // notify main task that we're done.
+    drop(terminated_tx);
 }
 
 async fn process_connection(
-    mut stopped_rx: watch::Receiver<bool>,
+    mut shutdown_rx: piper::Receiver<()>,
     mut stream: WebSocket,
     addr: SocketAddr,
     mut response_rx: mpsc::Receiver<Response>,
@@ -128,8 +163,9 @@ async fn process_connection(
     loop {
         tokio::select! {
             // Server shutting down
-            Some(stop) = stopped_rx.next() =>
-                if stop { break },
+            _ = shutdown_rx.next() => {
+                break
+            },
             // Write out response to socket
             Some(resp) = response_rx.next() =>
                 send_response(&resp, &mut stream, &addr).await,
@@ -184,7 +220,7 @@ async fn forward_request(
 
 async fn handle_requests(
     state: Arc<State>,
-    mut stopped_rx: watch::Receiver<bool>,
+    mut shutdown_rx: piper::Receiver<()>,
     addr: SocketAddr,
     mut request_rx: RequestRx<'_>,
     response_tx: mpsc::Sender<Response>,
@@ -195,7 +231,7 @@ async fn handle_requests(
     debug!("starting request handling loop for {}", addr);
     loop {
         tokio::select! {
-            Some(stop) = stopped_rx.next() => if stop {
+            _ = shutdown_rx.next() => {
                 debug!("received notification to stop handling {}", addr);
                 hard_stop = true;
                 break;
@@ -242,15 +278,20 @@ impl State {
 }
 
 /// Create a new, empty server state, and return a guard for it.
-pub fn make_guard(settings: netholdem_game::server::Settings) -> Arc<Guard> {
+pub fn make_guard(
+    settings: netholdem_game::server::Settings,
+    shutdown_rx: piper::Receiver<()>,
+    terminated_tx: piper::Sender<()>,
+) -> (Arc<Guard>, Weak<Guard>) {
     let state = Arc::new(State::new(settings));
-    let (stopped_tx, stopped_rx) = watch::channel(false);
     let guard = Guard {
         state,
-        stopped_tx,
-        stopped_rx,
+        shutdown_rx,
+        terminated_tx,
     };
-    Arc::new(guard)
+    let guard = Arc::new(guard);
+    let weak_guard = Arc::downgrade(&guard);
+    (guard, weak_guard)
 }
 
 /// Ensures that client tasks receive notification of server shutdown.
@@ -261,8 +302,8 @@ pub fn make_guard(settings: netholdem_game::server::Settings) -> Arc<Guard> {
 /// matter how it exits, this guard gets dropped.
 pub struct Guard {
     state: Arc<State>,
-    stopped_tx: watch::Sender<bool>,
-    stopped_rx: watch::Receiver<bool>,
+    shutdown_rx: piper::Receiver<()>,
+    terminated_tx: piper::Sender<()>,
 }
 
 impl<'a> Guard {
@@ -270,17 +311,16 @@ impl<'a> Guard {
     pub fn new_client(&self) -> ClientHandle {
         ClientHandle {
             state: self.state.clone(),
-            stopped_rx: self.stopped_rx.clone(),
+            shutdown_rx: self.shutdown_rx.clone(),
+            terminated_tx: self.terminated_tx.clone(),
         }
     }
 }
 
 impl<'a> Drop for Guard {
     fn drop(&mut self) {
+        debug!("dropping guard");
         self.state.stopping.store(true, Ordering::Release);
-        self.stopped_tx
-            .broadcast(true)
-            .expect("at least our own watch receiver left");
     }
 }
 
@@ -288,12 +328,13 @@ impl<'a> Drop for Guard {
 #[derive(Clone)]
 pub struct ClientHandle {
     state: Arc<State>,
-    stopped_rx: watch::Receiver<bool>,
+    shutdown_rx: piper::Receiver<()>,
+    terminated_tx: piper::Sender<()>,
 }
 
 impl ClientHandle {
     /// Consume the handle to acquire its members.
-    pub fn split(self) -> (Arc<State>, watch::Receiver<bool>) {
-        (self.state, self.stopped_rx)
+    pub fn split(self) -> (Arc<State>, piper::Receiver<()>, piper::Sender<()>) {
+        (self.state, self.shutdown_rx, self.terminated_tx)
     }
 }
